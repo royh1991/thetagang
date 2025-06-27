@@ -1,0 +1,53 @@
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: ibkr-gateway
+    restart: unless-stopped
+    environment:
+      TWS_USERID: ${TWS_USERID}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      TWS_ACCEPT_INCOMING: 'accept'
+      VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
+      READ_ONLY_API: ${READ_ONLY_API:-no}
+      TWOFA_TIMEOUT_ACTION: restart
+      GATEWAY_OR_TWS: gateway
+      TWS_TIMING_OF_RUN: StartDaily
+      TWS_OVERRIDE_TIME_ZONE: America/New_York
+      AUTO_RESTART_TIME: 11:59 PM
+      RELOGIN_AFTER_TWOFA_TIMEOUT: 'yes'
+      SAVE_TWS_SETTINGS: 'yes'
+      MINIMIZE_MAIN_WINDOW: 'yes'
+      JAVA_HEAP_SIZE: 768
+      TWS_COLD_RESTART: '11:59 PM'
+    ports:
+      - "127.0.0.1:4001:4003"  # IB Gateway API port (live) - container's socat port for live
+      - "127.0.0.1:4002:4004"  # IB Gateway API port (paper) - container's socat port for paper
+      - "127.0.0.1:5901:5900"  # VNC server for local debugging
+    volumes:
+      - ib-gateway-data:/home/ibgateway
+    networks:
+      - ib-network
+
+  # Uncomment when you're ready to run your bot
+  # bot:
+  #   build: .
+  #   container_name: ibkr-bot
+  #   restart: unless-stopped
+  #   environment:
+  #     IB_GATEWAY_HOST: ib-gateway
+  #     IB_GATEWAY_PORT: ${IB_GATEWAY_PORT:-4001}
+  #     ACCOUNT_ID: ${ACCOUNT_ID}
+  #   volumes:
+  #     - ./src:/app
+  #   depends_on:
+  #     - ib-gateway
+  #   networks:
+  #     - ib-network
+
+volumes:
+  ib-gateway-data:
+
+networks:
+  ib-network:
+    driver: bridge

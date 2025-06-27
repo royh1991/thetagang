@@ -1,0 +1,475 @@
+# IBKR Trading Bot Implementation Guide for LLMs
+## Comprehensive Documentation for HFT-Grade Trading System with ib_async
+
+This document serves as a comprehensive guide for LLMs assisting with IBKR trading bot development using Docker, ib_async, and professional HFT practices.
+
+## Table of Contents
+1. [System Architecture Overview](#system-architecture-overview)
+2. [Implementation Details](#implementation-details)
+3. [Key Learnings and Troubleshooting](#key-learnings-and-troubleshooting)
+4. [Advanced ib_async Patterns](#advanced-ib_async-patterns)
+5. [HFT Best Practices](#hft-best-practices)
+6. [Modular Architecture Design](#modular-architecture-design)
+7. [Testing Strategy](#testing-strategy)
+8. [Performance Optimization](#performance-optimization)
+
+## System Architecture Overview
+
+### Technology Stack
+- **Docker Image**: `ghcr.io/gnzsnz/ib-gateway:stable` (gnzsnz's IB Gateway Docker implementation)
+- **Python Library**: `ib_async v2.0.1` (successor to ib_insync after Ewald de Wit's passing)
+- **Async Framework**: Python asyncio with event-driven architecture
+- **Container Orchestration**: Docker Compose with specific port mappings
+
+### Port Configuration
+The system uses a specific port mapping architecture:
+```
+Host → Container (socat) → IB Gateway Internal
+4001 → 4003 → 4001 (Live Trading)
+4002 → 4004 → 4002 (Paper Trading)
+5901 → 5900 (VNC Access)
+```
+
+**Critical Understanding**: The container uses socat to forward connections from external ports (4003/4004) to internal IB Gateway ports (4001/4002).
+
+## Implementation Details
+
+### 1. Docker Configuration
+```yaml
+services:
+  ib-gateway:
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    environment:
+      TWS_USERID: ${TWS_USERID}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      # Critical settings for automation
+      TWOFA_TIMEOUT_ACTION: restart
+      AUTO_RESTART_TIME: 11:59 PM
+      RELOGIN_AFTER_TWOFA_TIMEOUT: 'yes'
+    ports:
+      - "127.0.0.1:4001:4003"  # Live trading
+      - "127.0.0.1:4002:4004"  # Paper trading
+      - "127.0.0.1:5901:5900"  # VNC
+```
+
+### 2. Connection Management
+```python
+# Critical: Use correct port based on trading mode
+trading_mode = os.getenv('TRADING_MODE', 'paper')
+if trading_mode == 'paper':
+    port = int(os.getenv('IB_GATEWAY_PORT', 4002))
+else:
+    port = int(os.getenv('IB_GATEWAY_PORT_LIVE', 4001))
+
+# Connection with proper error handling
+try:
+    ib.connect('localhost', port, clientId=1)
+except asyncio.TimeoutError:
+    # Gateway not ready - wait and retry
+```
+
+### 3. Event Loop Management
+**Critical Issue**: ib_async has its own event loop management. Mixing `asyncio.sleep()` with ib_async causes "This event loop is already running" errors.
+
+**Solution**: Always use `ib.sleep()` instead of `asyncio.sleep()` within ib_async context:
+```python
+# WRONG
+await asyncio.sleep(2)
+
+# CORRECT
+self.ib.sleep(2)
+```
+
+## Key Learnings and Troubleshooting
+
+### 1. Connection Issues
+- **Symptom**: TimeoutError when connecting
+- **Causes**: 
+  - IB Gateway not fully initialized (needs 30-60 seconds)
+  - Wrong port mapping
+  - API not enabled in IBKR account
+- **Solution**: Wait for "Configuration tasks completed" in logs
+
+### 2. Market Data Issues
+- **Symptom**: No market data or NaN values
+- **Causes**:
+  - Contract not qualified (missing conId)
+  - Market closed
+  - No market data subscription
+- **Solution**: 
+  ```python
+  contract = Stock('SPY', 'SMART', 'USD')
+  ib.qualifyContracts(contract)  # Critical step
+  ticker = ib.reqMktData(contract, '', False, False)
+  ```
+
+### 3. Docker Container Configuration
+- **Issue**: "Read-only file system" errors
+- **Cause**: Mounting config files as read-only
+- **Solution**: Let container manage its own config via environment variables
+
+### 4. Performance Metrics
+- **Latency from Europe**: 300-600ms
+- **Latency from AWS us-east-1**: 70-80ms
+- **Recommendation**: Deploy close to IBKR servers (US East Coast)
+
+## Advanced ib_async Patterns
+
+### 1. Architecture Overview
+ib_async implements a dual-thread architecture:
+- **Thread 1**: Sends messages to TWS/Gateway
+- **Thread 2**: EReader class reads from socket and queues messages
+
+### 2. Event-Driven Design
+```python
+# Subscribe to events
+def onOrderStatus(trade):
+    logger.info(f"Order status: {trade.orderStatus.status}")
+
+ib.orderStatusEvent += onOrderStatus
+
+# Available events:
+# - pendingTickersEvent
+# - barUpdateEvent
+# - newOrderEvent
+# - execDetailsEvent
+# - errorEvent
+```
+
+### 3. Async/Sync Dual API
+```python
+# Synchronous (blocks)
+bars = ib.reqHistoricalData(contract, ...)
+
+# Asynchronous (non-blocking)
+bars = await ib.reqHistoricalDataAsync(contract, ...)
+```
+
+### 4. State Management
+ib_async automatically synchronizes state with TWS/Gateway:
+- Positions
+- Orders
+- Account values
+- Executions
+
+No manual state tracking required.
+
+## HFT Best Practices
+
+### 1. Latency Optimization
+- **Colocation**: Deploy on AWS us-east-1 (closest to IBKR)
+- **Network**: Use enhanced networking, avoid WiFi
+- **Direct Routing**: Consider direct exchange routing vs SMART
+- **Connection Pooling**: Reuse connections, avoid reconnects
+
+### 2. Async Programming
+```python
+# Concurrent operations for lower latency
+async def process_multiple_symbols(symbols):
+    tasks = []
+    for symbol in symbols:
+        tasks.append(get_market_data_async(symbol))
+    results = await asyncio.gather(*tasks)
+    return results
+```
+
+### 3. Performance Profiling
+```python
+import time
+from functools import wraps
+
+def measure_latency(func):
+    @wraps(func)
+    async def wrapper(*args, **kwargs):
+        start = time.perf_counter()
+        result = await func(*args, **kwargs)
+        latency = (time.perf_counter() - start) * 1000
+        logger.debug(f"{func.__name__} latency: {latency:.2f}ms")
+        return result
+    return wrapper
+```
+
+### 4. Critical Path Optimization
+- Remove all non-essential operations from order path
+- Pre-calculate signals during quiet periods
+- Use in-memory caching for frequently accessed data
+- Consider Numba JIT for compute-intensive operations
+
+## Modular Architecture Design
+
+### 1. Event Bus Pattern
+Central event dispatcher for loose coupling:
+```python
+class EventBus:
+    async def emit(self, event_type: str, data: Any):
+        # Notify all subscribers asynchronously
+        tasks = [handler(data) for handler in self.handlers[event_type]]
+        await asyncio.gather(*tasks, return_exceptions=True)
+```
+
+### 2. Strategy Abstraction
+```python
+class BaseStrategy(ABC):
+    @abstractmethod
+    async def on_market_data(self, ticker: Ticker) -> Optional[Signal]:
+        """Process market data and generate signals"""
+        
+    @abstractmethod
+    async def calculate_position_size(self, signal: Signal) -> int:
+        """Risk-adjusted position sizing"""
+```
+
+### 3. Order Management System
+```python
+class OrderManager:
+    async def submit_order(self, signal: Signal) -> Trade:
+        # Risk checks
+        if not await self.risk_manager.check_limits(signal):
+            return None
+            
+        # Smart order routing
+        order = self.create_order(signal)
+        trade = self.ib.placeOrder(contract, order)
+        
+        # Track order lifecycle
+        self.active_orders[trade.order.orderId] = trade
+        return trade
+```
+
+### 4. Risk Management
+```python
+class RiskManager:
+    async def check_limits(self, signal: Signal) -> bool:
+        checks = [
+            self.check_position_limit(signal),
+            self.check_exposure_limit(signal),
+            self.check_drawdown_limit(),
+            self.check_correlation_limit(signal)
+        ]
+        results = await asyncio.gather(*checks)
+        return all(results)
+```
+
+## Testing Strategy
+
+### 1. Unit Testing Pattern
+```python
+import pytest
+from unittest.mock import Mock, AsyncMock
+
+@pytest.mark.asyncio
+async def test_order_submission():
+    # Mock IB connection
+    mock_ib = Mock()
+    mock_ib.placeOrder = Mock(return_value=Mock(order=Mock(orderId=1)))
+    
+    # Test order submission
+    order_manager = OrderManager(mock_ib)
+    signal = Signal('BUY', 'SPY', 100)
+    trade = await order_manager.submit_order(signal)
+    
+    assert trade is not None
+    assert mock_ib.placeOrder.called
+```
+
+### 2. Integration Testing
+```python
+async def test_end_to_end_flow():
+    # Connect to paper account
+    ib = IB()
+    ib.connect('localhost', 4002, clientId=99)
+    
+    try:
+        # Test complete flow
+        contract = Stock('SPY', 'SMART', 'USD')
+        ib.qualifyContracts(contract)
+        
+        # Get market data
+        ticker = ib.reqMktData(contract)
+        ib.sleep(2)
+        
+        # Place test order
+        order = LimitOrder('BUY', 1, ticker.ask + 0.01)
+        trade = ib.placeOrder(contract, order)
+        
+        # Verify order placed
+        assert trade.order.orderId > 0
+        
+        # Cancel order
+        ib.cancelOrder(order)
+        
+    finally:
+        ib.disconnect()
+```
+
+### 3. Performance Testing
+```python
+async def test_latency():
+    latencies = []
+    
+    for _ in range(100):
+        start = time.perf_counter()
+        # Critical path operation
+        await process_market_tick(ticker)
+        latency = (time.perf_counter() - start) * 1000
+        latencies.append(latency)
+    
+    # Assert performance requirements
+    assert np.mean(latencies) < 10  # Average < 10ms
+    assert np.percentile(latencies, 99) < 50  # 99th percentile < 50ms
+```
+
+## Performance Optimization
+
+### 1. Connection Management
+```python
+class ConnectionPool:
+    def __init__(self, size=5):
+        self.connections = []
+        for i in range(size):
+            ib = IB()
+            ib.connect('localhost', 4002, clientId=i+1)
+            self.connections.append(ib)
+    
+    async def get_connection(self):
+        # Round-robin or least-loaded selection
+        return self.connections[self.current % len(self.connections)]
+```
+
+### 2. Data Structure Optimization
+```python
+# Use numpy arrays for tick data
+class TickBuffer:
+    def __init__(self, size=10000):
+        self.prices = np.zeros(size, dtype=np.float64)
+        self.volumes = np.zeros(size, dtype=np.int64)
+        self.timestamps = np.zeros(size, dtype=np.int64)
+        self.index = 0
+    
+    def add_tick(self, price, volume, timestamp):
+        self.prices[self.index] = price
+        self.volumes[self.index] = volume
+        self.timestamps[self.index] = timestamp
+        self.index = (self.index + 1) % len(self.prices)
+```
+
+### 3. Cython/Numba Optimization
+```python
+from numba import jit
+
+@jit(nopython=True)
+def calculate_moving_average(prices, window):
+    """JIT-compiled moving average calculation"""
+    ma = np.zeros(len(prices))
+    for i in range(window, len(prices)):
+        ma[i] = np.mean(prices[i-window:i])
+    return ma
+```
+
+### 4. Memory Management
+```python
+# Prevent memory leaks with proper cleanup
+class StrategyManager:
+    def __init__(self):
+        self.strategies = {}
+        self.cleanup_interval = 3600  # 1 hour
+        asyncio.create_task(self.periodic_cleanup())
+    
+    async def periodic_cleanup(self):
+        while True:
+            await asyncio.sleep(self.cleanup_interval)
+            # Clear old data
+            for strategy in self.strategies.values():
+                strategy.clear_old_data()
+```
+
+## Common Integration Examples
+
+### 1. Complete Trading Bot Structure
+```
+ikbr/
+├── core/
+│   ├── __init__.py
+│   ├── event_bus.py       # Event dispatcher
+│   ├── market_data.py     # Data management
+│   ├── order_manager.py   # Order execution
+│   └── risk_manager.py    # Risk controls
+├── strategies/
+│   ├── __init__.py
+│   ├── base_strategy.py   # Abstract base
+│   └── examples/
+│       ├── momentum.py
+│       └── mean_reversion.py
+├── backtest/
+│   ├── __init__.py
+│   ├── engine.py          # Backtesting engine
+│   └── analytics.py       # Performance metrics
+├── tests/
+│   ├── unit/
+│   ├── integration/
+│   └── performance/
+├── config/
+│   ├── settings.py
+│   └── strategies/
+└── main.py               # Entry point
+```
+
+### 2. Real-World Strategy Implementation
+```python
+class MomentumStrategy(BaseStrategy):
+    def __init__(self, lookback=20, threshold=0.02):
+        self.lookback = lookback
+        self.threshold = threshold
+        self.price_buffer = deque(maxlen=lookback)
+    
+    async def on_market_data(self, ticker: Ticker) -> Optional[Signal]:
+        if not ticker.last:
+            return None
+            
+        self.price_buffer.append(ticker.last)
+        
+        if len(self.price_buffer) < self.lookback:
+            return None
+        
+        # Calculate momentum
+        momentum = (ticker.last - self.price_buffer[0]) / self.price_buffer[0]
+        
+        if momentum > self.threshold:
+            return Signal('BUY', ticker.contract.symbol, ticker.last)
+        elif momentum < -self.threshold:
+            return Signal('SELL', ticker.contract.symbol, ticker.last)
+        
+        return None
+```
+
+## Next Steps for Implementation
+
+1. **Build Core Infrastructure**
+   - Event bus for decoupled components
+   - Market data manager with caching
+   - Order manager with smart routing
+   - Risk manager with real-time checks
+
+2. **Implement Strategies**
+   - Base strategy class with standard interface
+   - Example strategies (momentum, mean reversion, pairs)
+   - Strategy registry for dynamic loading
+
+3. **Create Backtesting Framework**
+   - Event-driven backtester
+   - Realistic fill simulation
+   - Comprehensive analytics
+
+4. **Add Production Features**
+   - Monitoring and alerting
+   - Performance dashboards
+   - Automated deployment
+
+5. **Optimize for Production**
+   - Latency profiling and optimization
+   - Memory usage optimization
+   - Connection pooling
+   - Failover and recovery
+
+Remember: Every component must be thoroughly tested before integration. Start with paper trading and validate each module independently.

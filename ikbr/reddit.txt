@@ -1,0 +1,1622 @@
+Skip to main content
+IBKR execution speed feels slow? : r/algotrading
+
+
+r/algotrading
+Current search is within r/algotrading
+
+Remove r/algotrading filter and expand search to all of Reddit
+Search in r/algotrading
+Advertise on Reddit
+
+Open chat
+Create
+Create post
+Open inbox
+1
+
+User Avatar
+Expand user menu
+This account has been permanently banned. Check your inbox for a message with more information.
+Visit inbox
+Skip to NavigationSkip to Right Sidebar
+
+Back
+r/algotrading icon
+Go to algotrading
+r/algotrading
+•
+4 mo. ago
+laukax
+
+IBKR execution speed feels slow?
+Data
+I calculated my execution speeds based on the logs from my bot.
+
+Here's few samples, measured from the point the order is passed to the ib_async placeOrder, to the point I receive the position event.
+- 364, 333, 470, 275, 180, 510, 358 ms.
+
+Average is 357 ms. These buy limit orders were made in Europe on high liquidity US stocks during pre-market using SMART routing, with limit set at ask + 0.10. Maybe I should try with direct routing also.
+
+I think this is quite slow execution speed, what kind of speeds could I expect with other brokers?
+
+
+Upvote
+11
+
+Downvote
+
+17
+Go to comments
+
+
+Share
+Share
+u/trybeautifulai avatar
+trybeautifulai
+•
+Promoted
+
+Get a free trial from Beautiful.ai, and find out why it's used by over 35,000 modern teams.
+Sign Up
+beautiful.ai
+Thumbnail image: Get a free trial from Beautiful.ai, and find out why it's used by over 35,000 modern teams.
+Join the conversation
+Sort by:
+
+Best
+
+Search Comments
+Expand comment search
+Comments Section
+u/octopus4488 avatar
+octopus4488
+•
+4mo ago
+IB server accepts orders in about 5-6 msec, take another 30 msec for the transatlantic crossing.
+
+The rest of the delay is yours or of the library you are using.
+
+Source: I am deploying IB based algos to various clients for nearly 10 years.
+
+
+
+Upvote
+18
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+laukax
+OP
+•
+4mo ago
+•
+Edited 4mo ago
+I would like to have those kind of speeds.
+
+What kind of interface to IB are you using in your deployments?
+
+I'm using IB Gateway running in a Docker (https://github.com/gnzsnz/ib-gateway-docker), with ib_async (https://github.com/ib-api-reloaded/ib_async) to interface with it. I think I will profile the execution and see if I can find some bottlenecks.
+
+Edit: I profiled my code and it is sitting idle for 90% of the time after placing the buy order. So the delay doesn't seem to come from my application, but it could be due to IB Gateway.
+
+
+
+Upvote
+3
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+u/octopus4488 avatar
+octopus4488
+•
+4mo ago
+IB Gateway (or even TWS) won't do that on its own. Any chance your main server is for some reason misconfigured? Like you are in Singapore but your main server is not in Asia? Either way. 300 msec is crazy. Suspect and investigate anything you can, but not the bits that are used by a million other people. So Gateway is fine, Docker is fine, your Docker config could be suspect, same as your Gateway config, etc.
+
+Always remember: "select is not broken".
+
+
+
+Upvote
+4
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+laukax
+OP
+•
+4mo ago
+I haven't configured the server at all, so that might be it.
+
+IB Gateway says market data farm is usfarm, maybe I should switch to EU server if there is one. Do the orders go through the market data farm?
+
+How do I even configure the server for IB Gateway?
+
+
+Upvote
+1
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+rundef
+•
+4mo ago
+Isn't there some delay on their end to calculate the margin requirements for the order ?
+
+I think staging orders might help with that ?
+
+
+Upvote
+2
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+u/Kaawumba avatar
+Kaawumba
+•
+4mo ago
+This is not my experience. I see several hundred milliseconds between sending and getting confirmation that the order was submitted, from a VPS that is only 2 ms away from IBKR's servers. What are you trading? I'm trading SPXW option spreads.
+
+P.S.
+
+My data latency from databento is a few milliseconds. I doubt it is a problem with my server setup or internet connection.
+
+
+Upvote
+1
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+ConsiderationNo4035
+•
+4mo ago
+I am about to start using IBKR for trading, what are your thoughts or feedback till now ?
+
+Also do you have a github repo for a basic code base
+
+
+
+Upvote
+4
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+laukax
+OP
+•
+4mo ago
+Sorry but I can't share my codebase.
+
+The interface is a bit clunky, you need to run a separate process (TWS or IB gateway) as a gateway to IBKR. There is no websocket interface.
+
+ib_async makes it rather easy to implement an asyncio application in Python. I don't know how the situation is with other languages.
+
+
+
+Upvote
+2
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+ConsiderationNo4035
+•
+4mo ago
+I totally understand. I am only going to use python and I will keep this things in my mind while development.
+
+
+
+Upvote
+1
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+laukax
+OP
+•
+4mo ago
+The biggest challenge with Python is the slow processing time. If you need fast execution and want to process tick by tick, I would recommend using a faster compiled language. Level 2 order book data is problematic as there's a lot of data to process.
+
+If you are going with Python, use fast native libraries such as numpy and/or numba. Try to avoid pandas, it is slow.
+
+If you work at bar data or candle stick aggregation level, it doesn't really matter.
+
+
+
+Upvote
+4
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+ConsiderationNo4035
+•
+4mo ago
+Oh I see, thanks man ! You saved my hours ! This is what experience brings.
+
+Yes I am gonna try my entire scripts with numpy only.
+
+
+Upvote
+2
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+u/ResourceHead617 avatar
+ResourceHead617
+•
+4mo ago
+This would be amazing.
+
+
+Upvote
+1
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+METALz
+•
+4mo ago
+If you are not using co-location or not living very close to the servers then you need to calculate with some additional latency, especially from Europe (you can see on latency maps the avg ms from NJ (Nasdaq servers) to your location).
+
+Then everything else adds on top of this, e.g your hardware/software/algo, ISP, etc, in your case maybe run some longer ping, udp, etc tests to see if there are spikes around the day.
+
+In backtests you can calculate with this as extra slippage.
+
+
+
+Upvote
+3
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+laukax
+OP
+•
+2mo ago
+I transferred my client to AWS New York. The latency went down to 70-80ms, which is a huge difference to the 300-600ms.
+
+
+Upvote
+1
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+u/ubereats avatar
+ubereats
+•
+Promoted
+
+TLDR: Get almost anything for gameday delivered on Uber Eats, from beer to pizza to napkins.
+Order Now
+ubereats.com
+Thumbnail image: TLDR: Get almost anything for gameday delivered on Uber Eats, from beer to pizza to napkins.
+
+[deleted]
+•
+4mo ago
+u/jayd1979 avatar
+jayd1979
+•
+4mo ago
+Probably risk management checks on IB thats causing much of the delay
+
+
+
+Upvote
+1
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+laukax
+OP
+•
+4mo ago
+That is likely part of it, but I guess there's no way to verify this.
+
+I should check if switching to direct routing has any effect.
+
+
+Upvote
+1
+
+Downvote
+
+Reply
+reply
+
+
+Award
+
+Share
+Share
+
+Community Info Section
+r/algotrading
+Join
+Algorithmic Trading
+A place for redditors to discuss quantitative trading, statistical methods, econometrics, programming, implementation, automated strategies, and bounce ideas off each other for constructive criticism. Feel free to submit papers/links of things you find interesting.
+
+Show more
+Created Jun 17, 2012
+Public
+1.8M
+Members
+75
+ Online
+Top 1%
+Rank by size 
+User flair
+u/Curious_Database6005 avatar
+Curious_Database6005
+Community Bookmarks
+Wiki
+> Official Discord <
+R Lang in Fin Chat
+Book Recommendations
+AlgoTrading Links
+Live Chat (Discord)
+R Lang in Finance Chat
+R Lang in Finance Chat
+Wiki
+Wiki
+Book Recommendations
+Book Recommendations
+Hall of Fame Threads
+Hall of Fame Threads
+Rules
+1
+No Self-Promotion or Promotional Activity
+This community is not a platform for marketing or self-promotion. Content marketing, product or service announcements, and affiliate links are prohibited. Posts that solely aim to bring attention to your blog, YouTube channel, social media, or any other personal site are not allowed, even if the content is free or educational. Low-quality promotional posts will be removed, and users who repeatedly post such content may be banned. Avoid asking users to “PM for details” or any similar solicitation
+
+2
+High Quality Questions Only
+If you post a question without showing any homework of why your question has not been answered and it is easily answerable by google your post will be removed and you will get a 3-14 day suspension.
+
+If your question has already been answered, it will also be removed.
+
+3
+Do Not Ask for Strategies
+This community values learning and thoughtful discussion, not shortcuts. Posts asking others to share their working strategies without any prior research or effort will be removed. If you’re looking for guidance, we encourage you to ask specific, well-researched questions that contribute to the conversation. This is a space for sharing insights and knowledge, not for simply obtaining ready-made strategies. Please respect the time and expertise of other members by putting in effort before posting
+
+4
+Keep it Professional and Friendly
+No insults or attacks of any kind. Abusive posters will be banned. We don't care if they called you names first; report the abuse to us and we will deal with the offending party (getting into a name calling spat will likely just get all parties involved banned.)
+
+5
+No Gain / Loss (P/L) Porn
+If you’re sharing your account profit or loss (P/L), you must provide a thorough write-up that explains your trading approach, including the tools, platforms, and ideas used. Simple snapshots or posts lacking context will be removed. This rule is in place to ensure that these posts contribute to the community’s learning and provide actionable insights rather than just showcasing results.
+
+Moderators
+Message Mods
+u/kylebalkissoon avatar
+u/kylebalkissoon
+u/ModwithABod avatar
+u/ModwithABod
+u/finance_student 
+Algo/Prop Trader
+Jack Larkin
+u/BreakerSpirit avatar
+u/BreakerSpirit
+u/Jrbell19 avatar
+u/Jrbell19
+u/AutoModerator avatar
+u/AutoModerator
+View all moderators
+Reddit Rules
+Privacy Policy
+User Agreement
+Reddit, Inc. © 2025. All rights reserved.
+
+Collapse Navigation
+
+
+Skip to content
+Navigation Menu
+ib-api-reloaded
+ib_async
+
+Type / to search
+Code
+Issues
+48
+Pull requests
+12
+Discussions
+Actions
+Projects
+Security
+Insights
+Owner avatar
+ib_async
+Public
+ib-api-reloaded/ib_async
+Go to file
+t
+Name		
+mattsta
+mattsta
+New release: 2.0.1
+2afdae4
+ · 
+5 days ago
+.github
+Add some pypy versions to CI building too
+2 weeks ago
+docs
+New release: 2.0.1
+5 days ago
+examples
+Rename project to ib_async and modernize layout
+last year
+ib_async
+Reformat for style
+2 weeks ago
+notebooks
+Reformat for style
+2 weeks ago
+tests
+Fix message sending with unqualified contracts
+last year
+.gitattributes
+mark notebooks as documentation
+8 years ago
+.gitignore
+Fix message sending with unqualified contracts
+last year
+LICENSE
+Rename project to ib_async and modernize layout
+last year
+README.md
+Refactor README a little
+5 days ago
+pyproject.toml
+New release: 2.0.1
+5 days ago
+Repository files navigation
+README
+BSD-2-Clause license
+Build PyVersion PyPiVersion License Docs
+
+ib_async
+Update
+Introduction
+ib_async is a Python library that provides a clean, modern interface to Interactive Brokers' Trader Workstation (TWS) and IB Gateway. It handles the complexities of the IBKR API so you can focus on building trading applications, research tools, and market data analysis.
+
+What You Can Build
+Market Data Applications: Stream live quotes, historical data, and market depth
+Trading Systems: Place, modify, and monitor orders programmatically
+Portfolio Tools: Track positions, account balances, and P&L in real-time
+Research Platforms: Analyze contract details, option chains, and fundamental data
+Risk Management: Monitor exposures and implement automated controls
+Key Features
+Simple and Intuitive: Write straightforward Python code without dealing with callback complexity
+Automatic Synchronization: The IB component stays in sync with TWS/Gateway automatically
+Async-Ready: Built on asyncio and eventkit for high-performance applications
+Jupyter-Friendly: Interactive development with live data in notebooks
+Production-Ready: Robust error handling, reconnection logic, and comprehensive logging
+Be sure to take a look at the notebooks, the recipes and the API docs.
+
+Installation
+pip install ib_async
+Requirements:
+
+Python 3.10 or higher
+We plan to support Python releases 2 years back which allows us to continue adding newer features and performance improvements over time.
+A running IB Gateway application (or TWS with API mode enabled)
+stable gateway — updated every few months
+latest gateway — updated weekly
+Make sure the API port is enabled and 'Download open orders on connection' is checked.
+You may also want to increase the Java memory usage under Configure->Settings->Memory Allocation to 4096 MB minimum to prevent gateway crashes when loading bulk data.
+The ibapi package from IB is not needed. ib_async implements the full IBKR API binary protocol internally.
+
+Build Manually
+First, install poetry:
+
+pip install poetry -U
+Installing Only Library
+poetry install
+Install Everything (enable docs + dev testing)
+poetry install --with=docs,dev
+Generate Docs
+poetry install --with=docs
+poetry run sphinx-build -b html docs html
+Check Types
+poetry run mypy ib_async
+Build Package
+poetry build
+Upload Package (if maintaining)
+poetry install
+poetry config pypi-token.pypi your-api-token
+poetry publish --build
+Setup Interactive Brokers
+1. Download IB Gateway or TWS
+IB Gateway (Stable) — Updated every few months, more stable
+IB Gateway (Latest) — Updated weekly, newest features
+Trader Workstation (TWS) — Full trading platform
+2. Configure API Access
+Enable API: Go to Configure → API → Settings and check "Enable ActiveX and Socket Clients"
+Set Port: Default ports are 7497 (TWS) and 4001 (Gateway). You can change these if needed.
+Allow Connections: Add 127.0.0.1 to "Trusted IPs" if connecting locally
+Download Orders: Check "Download open orders on connection" to see existing orders
+3. Performance Settings
+Memory: Go to Configure → Settings → Memory Allocation and set to 4096 MB minimum to prevent crashes with bulk data
+Timeouts: Increase API timeout settings if you experience disconnections during large data requests
+4. Common Connection Issues
+Connection Refused
+
+# Make sure TWS/Gateway is running and API is enabled
+# Check that ports match (7497 for TWS, 4001 for Gateway)
+ib.connect('127.0.0.1', 7497, clientId=1)  # TWS
+ib.connect('127.0.0.1', 4001, clientId=1)  # Gateway
+Client ID Conflicts
+
+# Each connection needs a unique client ID
+ib.connect('127.0.0.1', 7497, clientId=1)  # Use different numbers for multiple connections
+Market Data Issues
+
+# For free delayed data (no subscription required)
+ib.reqMarketDataType(3)  # Delayed
+ib.reqMarketDataType(4)  # Delayed frozen
+
+# For real-time data (requires subscription)
+ib.reqMarketDataType(1)  # Real-time
+Connection Patterns
+Basic Script Usage
+from ib_async import *
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+# Your code here
+ib.disconnect()
+Jupyter Notebook Usage
+from ib_async import *
+util.startLoop()  # Required for notebooks
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+# Your code here - no need to call ib.run()
+Async Application
+import asyncio
+from ib_async import *
+
+async def main():
+    ib = IB()
+    await ib.connectAsync('127.0.0.1', 7497, clientId=1)
+    # Your async code here
+    ib.disconnect()
+
+asyncio.run(main())
+Quick Start
+Basic Connection
+from ib_async import *
+
+# Connect to TWS or IB Gateway
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+print("Connected")
+
+# Disconnect when done
+ib.disconnect()
+Get Account Information
+from ib_async import *
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+
+# Get account summary
+account = ib.managedAccounts()[0]
+summary = ib.accountSummary(account)
+for item in summary:
+    print(f"{item.tag}: {item.value}")
+
+ib.disconnect()
+Historical Data
+from ib_async import *
+# util.startLoop()  # uncomment this line when in a notebook
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+
+# Request historical data
+contract = Forex('EURUSD')
+bars = ib.reqHistoricalData(
+    contract, endDateTime='', durationStr='30 D',
+    barSizeSetting='1 hour', whatToShow='MIDPOINT', useRTH=True)
+
+# Convert to pandas dataframe (pandas needs to be installed):
+df = util.df(bars)
+print(df.head())
+
+ib.disconnect()
+Live Market Data
+from ib_async import *
+import time
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+
+# Subscribe to live market data
+contract = Stock('AAPL', 'SMART', 'USD')
+ticker = ib.reqMktData(contract, '', False, False)
+
+# Print live quotes for 30 seconds
+for i in range(30):
+    ib.sleep(1)  # Wait 1 second
+    if ticker.last:
+        print(f"AAPL: ${ticker.last} (bid: ${ticker.bid}, ask: ${ticker.ask})")
+
+ib.disconnect()
+Place a Simple Order
+from ib_async import *
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+
+# Create a contract and order
+contract = Stock('AAPL', 'SMART', 'USD')
+order = MarketOrder('BUY', 100)
+
+# Place the order
+trade = ib.placeOrder(contract, order)
+print(f"Order placed: {trade}")
+
+# Monitor order status
+while not trade.isDone():
+    ib.sleep(1)
+    print(f"Order status: {trade.orderStatus.status}")
+
+ib.disconnect()
+More Complete Examples
+Portfolio Monitoring
+from ib_async import *
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+
+# Get current positions
+positions = ib.positions()
+print("Current Positions:")
+for pos in positions:
+    print(f"{pos.contract.symbol}: {pos.position} @ {pos.avgCost}")
+
+# Get open orders
+orders = ib.openTrades()
+print(f"\nOpen Orders: {len(orders)}")
+for trade in orders:
+    print(f"{trade.contract.symbol}: {trade.order.action} {trade.order.totalQuantity}")
+
+ib.disconnect()
+Real-time P&L Tracking
+from ib_async import *
+
+def onPnL(pnl):
+    print(f"P&L Update: Unrealized: ${pnl.unrealizedPnL:.2f}, Realized: ${pnl.realizedPnL:.2f}")
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+
+# Subscribe to P&L updates
+account = ib.managedAccounts()[0]
+pnl = ib.reqPnL(account)
+pnl.updateEvent += onPnL
+
+# Keep running to receive updates
+try:
+    ib.run()  # Run until interrupted
+except KeyboardInterrupt:
+    ib.disconnect()
+Advanced Order Management
+from ib_async import *
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+
+# Create a bracket order (entry + stop loss + take profit)
+contract = Stock('TSLA', 'SMART', 'USD')
+
+# Parent order
+parent = LimitOrder('BUY', 100, 250.00)
+parent.orderId = ib.client.getReqId()
+parent.transmit = False
+
+# Stop loss
+stopLoss = StopOrder('SELL', 100, 240.00)
+stopLoss.orderId = ib.client.getReqId()
+stopLoss.parentId = parent.orderId
+stopLoss.transmit = False
+
+# Take profit
+takeProfit = LimitOrder('SELL', 100, 260.00)
+takeProfit.orderId = ib.client.getReqId()
+takeProfit.parentId = parent.orderId
+takeProfit.transmit = True
+
+# Place bracket order
+trades = []
+trades.append(ib.placeOrder(contract, parent))
+trades.append(ib.placeOrder(contract, stopLoss))
+trades.append(ib.placeOrder(contract, takeProfit))
+
+print(f"Bracket order placed: {len(trades)} orders")
+ib.disconnect()
+Historical Data Analysis
+from ib_async import *
+import pandas as pd
+
+ib = IB()
+ib.connect('127.0.0.1', 7497, clientId=1)
+
+# Get multiple timeframes
+contract = Stock('SPY', 'SMART', 'USD')
+
+# Daily bars for 1 year
+daily_bars = ib.reqHistoricalData(
+    contract, endDateTime='', durationStr='1 Y',
+    barSizeSetting='1 day', whatToShow='TRADES', useRTH=True)
+
+# 5-minute bars for last 5 days
+intraday_bars = ib.reqHistoricalData(
+    contract, endDateTime='', durationStr='5 D',
+    barSizeSetting='5 mins', whatToShow='TRADES', useRTH=True)
+
+# Convert to DataFrames
+daily_df = util.df(daily_bars)
+intraday_df = util.df(intraday_bars)
+
+print(f"Daily bars: {len(daily_df)} rows")
+print(f"Intraday bars: {len(intraday_df)} rows")
+
+# Calculate simple moving average
+daily_df['SMA_20'] = daily_df['close'].rolling(20).mean()
+print(daily_df[['date', 'close', 'SMA_20']].tail())
+
+ib.disconnect()
+Library Structure
+Core Components
+ib_async.ib.IB - Main interface class
+
+Connection management (connect(), disconnect(), connectAsync())
+Market data requests (reqMktData(), reqHistoricalData())
+Order management (placeOrder(), cancelOrder())
+Account data (positions(), accountSummary(), reqPnL())
+ib_async.contract - Financial instruments
+
+Stock, Option, Future, Forex, Index, Bond
+Contract - Base class for all instruments
+ComboLeg, DeltaNeutralContract - Complex instruments
+ib_async.order - Order types and management
+
+MarketOrder, LimitOrder, StopOrder, StopLimitOrder
+Order - Base order class with all parameters
+OrderStatus, OrderState - Order execution tracking
+Trade - Complete order lifecycle tracking
+ib_async.ticker - Real-time market data
+
+Ticker - Live quotes, trades, and market data
+Automatic field updates (bid, ask, last, volume, etc.)
+Event-driven updates via updateEvent
+ib_async.objects - Data structures
+
+BarData - Historical price bars
+Position - Portfolio positions
+PortfolioItem - Portfolio details with P&L
+AccountValue - Account metrics
+Key Patterns
+Synchronous vs Asynchronous
+
+# Synchronous (blocks until complete)
+bars = ib.reqHistoricalData(contract, ...)
+
+# Asynchronous (yields to event loop)
+bars = await ib.reqHistoricalDataAsync(contract, ...)
+Event Handling
+
+# Subscribe to events
+def onOrderUpdate(trade):
+    print(f"Order update: {trade.orderStatus.status}")
+
+ib.orderStatusEvent += onOrderUpdate
+
+# Or with async
+async def onTicker(ticker):
+    print(f"Price update: {ticker.last}")
+
+ticker.updateEvent += onTicker
+Error Handling
+
+try:
+    ib.connect('127.0.0.1', 7497, clientId=1)
+except ConnectionRefusedError:
+    print("TWS/Gateway not running or API not enabled")
+except Exception as e:
+    print(f"Connection error: {e}")
+Documentation
+The complete API documentation.
+
+Changelog.
+
+Development
+Running Tests
+poetry install --with=dev
+poetry run pytest
+Type Checking
+poetry run mypy ib_async
+Code Formatting
+poetry run ruff format
+poetry run ruff check --fix
+Local Development
+Clone the repository:
+git clone https://github.com/ib-api-reloaded/ib_async.git
+cd ib_async
+Install dependencies:
+poetry install --with=dev,docs
+Make your changes and run tests:
+poetry run pytest
+poetry run mypy ib_async
+Submit a pull request with:
+Clear description of changes
+Tests for new functionality
+Updated documentation if needed
+Contributing Guidelines
+Follow existing code style (enforced by ruff)
+Add tests for new features
+Update documentation for user-facing changes
+Keep commits focused and well-described
+Be responsive to code review feedback
+Community Resources
+If you have other public work related to ib_async or ib_insync open an issue and we can keep an active list here.
+
+Projects below are not endorsed by any entity and are purely for reference or entertainment purposes.
+
+Adi's livestream VODs about using IBKR APIs: Interactive Brokers API in Python
+Matt's IBKR python CLI: icli
+Corporate data parsing via IBKR API: ib_fundamental
+Disclaimer
+The software is provided on the conditions of the simplified BSD license.
+
+This project is not affiliated with Interactive Brokers Group, Inc.
+
+Official Interactive Brokers API Docs
+
+History
+This library was originally created by Ewald de Wit as tws_async in early-2017 then became the more prominent ib_insync library in mid-2017. He maintained and improved the library for the world to use for free until his unexpected passing in early 2024. Afterward, we decided to rename the project to ib_async under a new github organization since we lost access to modify anything in the original repos and packaging and docs infrastructure.
+
+The library is currently maintained by Matt Stancliff and we are open to adding more committers and org contributors if people show interest in helping out.
+
+About
+Python sync/async framework for Interactive Brokers API (replaces ib_insync)
+
+Topics
+trading interactive-brokers twsapi ibkr ib-insync interactive-brokers-api ib-async
+Resources
+ Readme
+License
+ BSD-2-Clause license
+ Activity
+ Custom properties
+Stars
+ 833 stars
+Watchers
+ 51 watching
+Forks
+ 131 forks
+Report repository
+Releases 1
+v2.0.1
+Latest
+5 days ago
+Sponsor this project
+@mattsta
+mattsta Matt Stancliff
+Learn more about GitHub Sponsors
+Packages
+No packages published
+Contributors
+5
+@mattsta
+@HenryAsa
+@Gamrix
+@gnzsnz
+@zhengchenliang
+Deployments
+15
+ github-pages 5 days ago
++ 14 deployments
+Languages
+Python
+100.0%
+Footer
+© 2025 GitHub, Inc.
+Footer navigation
+Terms
+Privacy
+Security
+Status
+Docs
+Contact
+Manage cookies
+Do not share my personal information
+
+
+Skip to content
+Navigation Menu
+gnzsnz
+ib-gateway-docker
+
+Type / to search
+Code
+Issues
+2
+Pull requests
+3
+Discussions
+Actions
+Projects
+Security
+Insights
+Owner avatar
+ib-gateway-docker
+Public
+gnzsnz/ib-gateway-docker
+Go to file
+t
+Name		
+github-actions[bot]github-actions
+github-actions[bot]
+and
+github-actions
+Update latest to 10.38.1b (#287)
+d07caac
+ · 
+2 days ago
+.github
+Merge branch 'master' into aarch64
+8 months ago
+image-files
+SecondFactorDevice env var (#162)
+9 months ago
+latest
+Update latest to 10.38.1b (#287)
+2 days ago
+stable
+Update stable to 10.30.1w (#276)
+last month
+.gitignore
+Secret (#97)
+last year
+.markdownlint.json
+Pre commit (#44)
+2 years ago
+.pre-commit-config.yaml
+temporary fix for #241 (#242)
+4 months ago
+Dockerfile.template
+Update IBC from 3.21.2 to 3.22.0
+2 months ago
+Dockerfile.tws.template
+Update IBC from 3.21.2 to 3.22.0
+2 months ago
+LICENSE
+Update LICENSE
+3 years ago
+README.md
+Update latest to 10.38.1b (#287)
+2 days ago
+docker-compose.yml
+SecondFactorDevice env var (#162)
+9 months ago
+logo.png
+remove doc folder
+3 years ago
+template_README.md
+Readme typo fixes (#172)
+9 months ago
+tws-docker-compose.yml
+SecondFactorDevice env var (#162)
+9 months ago
+update.sh
+TWS with IBC running in an rdesktop container. (#45)
+2 years ago
+Repository files navigation
+README
+MIT license
+Interactive Brokers Gateway Docker
+IB Gateway Docker
+
+What is it?
+A docker image to run Interactive Brokers Gateway and TWS without any human interaction on a docker container
+
+It includes:
+
+IB Gateway (stable or latest)
+Trader Workstation TWS (stable or latest), from 10.26.1h
+IBC - to control TWS/IB Gateway (simulates user input).
+Xvfb - a X11 virtual framebuffer to run IB Gateway Application without graphics hardware.
+x11vnc - a VNC server to interact with the IB Gateway user interface (optional, for development / maintenance purpose).
+xrdp/xfce enviroment for TWS. Build on top of linuxserver/rdesktop.
+socat a tool to accept TCP connection from non-localhost and relay it to IB Gateway from localhost (IB Gateway restricts connections to container's 127.0.0.1 by default).
+Optional remote SSH tunnel to provide secure connections for both IB Gateway and VNC. Only available for 10.19.2g-stable and 10.25.1o-latest or greater.
+Support parallel execution of live and paper trading mode.
+Secrets support (latest 10.29.1e, stable 10.19.2m or greater)
+Works well together with Jupyter Quant docker image.
+Supported Tags
+Images are provided for IB gateway and TWS. With the following tags:
+
+Image	Channel	IB Gateway Version	IBC Version	Docker Tags
+ib-gateway	latest	10.38.1b	3.22.0	latest 10.38 10.38.1b
+ib-gateway	stable	10.30.1w	3.22.0	stable 10.30 10.30.1w
+tws-rdesktop	latest	10.38.1b	3.22.0	latest 10.38 10.38.1b
+tws-rdesktop	stable	10.30.1w	3.22.0	stable 10.30 10.30.1w
+All tags are available in the container repository for ib-gateway and tws-rdesktop. IB Gateway and TWS share the same version numbers and tags.
+
+How to use it?
+For the two images available, ib-gateway and tws-rdesktop, you can use the sample docker compose files as a starting point.
+
+Create a docker-compose.yml file (or include ib-gateway services on your existing one). The sample files provided can be used as starting point, ib-gateway compose and tws-rdesktop compose.
+
+Looking for help? Please go to discussion section for common problems and solutions.
+
+name: algo-trader
+services:
+  ib-gateway:
+    restart: always
+    build:
+      context: ./stable
+      tags:
+        - "ghcr.io/gnzsnz/ib-gateway:stable"
+    image: ghcr.io/gnzsnz/ib-gateway:stable
+    environment:
+      TWS_USERID: ${TWS_USERID}
+      TWS_PASSWORD: ${TWS_PASSWORD}
+      TRADING_MODE: ${TRADING_MODE:-paper}
+      TWS_SETTINGS_PATH: ${TWS_SETTINGS_PATH:-}
+      TWS_ACCEPT_INCOMING: ${TWS_ACCEPT_INCOMING:-}
+      READ_ONLY_API: ${READ_ONLY_API:-}
+      VNC_SERVER_PASSWORD: ${VNC_SERVER_PASSWORD:-}
+      TWOFA_TIMEOUT_ACTION: ${TWOFA_TIMEOUT_ACTION:-exit}
+      BYPASS_WARNING: ${BYPASS_WARNING:-}
+      AUTO_RESTART_TIME: ${AUTO_RESTART_TIME:-}
+      AUTO_LOGOFF_TIME: ${AUTO_LOGOFF_TIME:-}
+      TWS_COLD_RESTART: ${TWS_COLD_RESTART:-}
+      SAVE_TWS_SETTINGS: ${SAVE_TWS_SETTINGS:-}
+      RELOGIN_AFTER_TWOFA_TIMEOUT: ${RELOGIN_AFTER_TWOFA_TIMEOUT:-no}
+      TWOFA_EXIT_INTERVAL: ${TWOFA_EXIT_INTERVAL:-60}
+      TWOFA_DEVICE: ${TWOFA_DEVICE:-}
+      EXISTING_SESSION_DETECTED_ACTION: ${EXISTING_SESSION_DETECTED_ACTION:-primary}
+      ALLOW_BLIND_TRADING: ${ALLOW_BLIND_TRADING:-no}
+      TIME_ZONE: ${TIME_ZONE:-Etc/UTC}
+      TZ: ${TIME_ZONE:-Etc/UTC}
+      CUSTOM_CONFIG: ${CUSTOM_CONFIG:-NO}
+      JAVA_HEAP_SIZE: ${JAVA_HEAP_SIZE:-}
+      SSH_TUNNEL: ${SSH_TUNNEL:-}
+      SSH_OPTIONS: ${SSH_OPTIONS:-}
+      SSH_ALIVE_INTERVAL: ${SSH_ALIVE_INTERVAL:-}
+      SSH_ALIVE_COUNT: ${SSH_ALIVE_COUNT:-}
+      SSH_PASSPHRASE: ${SSH_PASSPHRASE:-}
+      SSH_REMOTE_PORT: ${SSH_REMOTE_PORT:-}
+      SSH_USER_TUNNEL: ${SSH_USER_TUNNEL:-}
+      SSH_RESTART: ${SSH_RESTART:-}
+      SSH_VNC_PORT: ${SSH_VNC_PORT:-}
+#    volumes:
+#      - ${PWD}/jts.ini:/home/ibgateway/Jts/jts.ini
+#      - ${PWD}/config.ini:/home/ibgateway/ibc/config.ini
+#      - ${PWD}/tws_settings/:${TWS_SETTINGS_PATH:-/home/ibgateway/Jts}
+#      - ${PWD}/ssh/:/home/ibgateway/.ssh
+    ports:
+      - "127.0.0.1:4001:4003"
+      - "127.0.0.1:4002:4004"
+      - "127.0.0.1:5900:5900"
+All environment variables are common between ibgateway and TWS image, unless specifically stated. The container can be configured with the following environment variables:
+
+Variable	Description	Default
+TWS_USERID	The TWS username.	
+TWS_PASSWORD	The TWS password.	
+TWS_PASSWORD_FILE	The file containing TWS password.	
+TRADING_MODE	live or paper. From 10.26.1k it supports both which will start ib-gateway or TWS in live AND paper mode in parallel within the container.	paper
+TWS_USERID_PAPER	If TRADING_MODE=both, then this is required to pass paper account user	not defined
+TWS_PASSWORD_PAPER	If TRADING_MODE=both, then this is required to pass paper account password	not defined
+TWS_PASSWORD_PAPER_FILE	If TRADING_MODE=both, then this is required to pass paper account password	not defined
+READ_ONLY_API	yes or no. See IBC documentation	not defined
+VNC_SERVER_PASSWORD	VNC server password. If not defined, then VNC server will NOT start. Specific to ibgateway, ignored by TWS.	not defined (VNC disabled)
+VNC_SERVER_PASSWORD_FILE	VNC server password. If not defined, then VNC server will NOT start. Specific to ibgateway, ignored by TWS.	not defined (VNC disabled)
+TWOFA_TIMEOUT_ACTION	'exit' or 'restart', set to 'restart if you set AUTO_RESTART_TIME. See IBC documentation	exit
+TWOFA_DEVICE	second factor authentication device. See IBC documentation	not defined
+BYPASS_WARNING	Settings relate to the corresponding 'Precautions' checkboxes in the API section of the Global Configuration dialog. Accepted values yes, no if not set, the existing TWS/Gateway configuration is unchanged	not defined
+AUTO_RESTART_TIME	time to restart IB Gateway, does not require daily 2FA validation. format hh:mm AM/PM. See IBC documentation	not defined
+AUTO_LOGOFF_TIME	Auto-Logoff: at a specified time, TWS shuts down tidily, without restarting	not defined
+TWS_COLD_RESTART	IBC >= 3.19 set this value to hh:mm	not defined
+SAVE_TWS_SETTINGS	automatically save its settings on a schedule of your choosing. You can specify one or more specific times, ex SaveTwsSettingsAt=08:00   12:30 17:30	not defined
+RELOGIN_AFTER_TWOFA_TIMEOUT	support relogin after timeout. See IBC documentation	no
+EXISTING_SESSION_DETECTED_ACTION	Set Existing Session Detected Action. See IBC documentation	primary
+ALLOW_BLIND_TRADING	TWS displays a dialog to warn you against blind trading.See IBC documentation	no
+TIME_ZONE	Support for timezone, see your TWS jts.ini file for valid values on a tz database. This sets time zone for IB Gateway. If jts.ini exists it will not be set. if TWS_SETTINGS_PATH is set and stored in a volume, jts.ini will already exists so this will not be used. Examples Europe/Paris, America/New_York, Asia/Tokyo	"Etc/UTC"
+TWS_SETTINGS_PATH	Settings path used by IBC's parameter --tws_settings_path. Use with a volume to preserve settings in the volume. If TRADING_MODE=both this will be the prefix four your settings. ex /config/tws_settings_live and /config/tws_settings_paper.	
+TWS_ACCEPT_INCOMING	See IBC documentation, possible values accept, reject, manual	manual
+CUSTOM_CONFIG	If set to yes, then run.sh will not generate config files using env variables. You should mount config files. Use with care and only if you know what you are doing.	NO
+JAVA_HEAP_SIZE	Set Java heap, default 768MB, TWS might need more. Proposed value 1024. Enter just the number, don't enter units, ex mb. See Increase Memory Size for TWS	not defined
+SSH_TUNNEL	If set to yes then socat won't start, instead a remote ssh tunnel is started. if set to both then socat AND remote ssh tunnel are started. SSH keys should be provided to container through ~/.ssh volume.	not defined
+SSH_OPTIONS	additional options for ssh client	not defined
+SSH_ALIVE_INTERVAL	ssh ServerAliveInterval setting. Don't set it in SSH_OPTIONS as this behavior is undefined.	20
+SSH_ALIVE_COUNT	ssh ServerAliveCountMax setting. Don't set it in SSH_OPTIONS as this behavior is undefined.	not defined
+SSH_PASSPHRASE	passphrase for ssh keys. If set the container will start ssh-agent and add ssh keys	not defined
+SSH_PASSPHRASE_FILE	file containing passphrase for ssh keys. If set the container will start ssh-agent and add ssh keys	not defined
+SSH_REMOTE_PORT	Remote port for ssh tunnel. If TRADING_MODE=both then SSH_REMOTE_PORT is set to paper port 4002/7498	Same port than IB gateway 4001/4002 or 7497/7498
+SSH_USER_TUNNEL	user@server to connect to	not defined
+SSH_RESTART	Number of seconds to wait before restarting tunnel in case of disconnection.	5
+SSH_VNC_PORT	If set, then a remote ssh tunnel will be created with remote port equal to SSH_VNC_PORT. Specific to ibgateway, ignored by TWS.	not defined
+SSH_RDP_PORT	If set, then a remote ssh tunnel will be created with remote port equal to SSH_RDP_PORT. Specific to TWS, ignored by ibgateway.	not defined
+PUID	User uid for user abc (linuxserver default user name). Specific to TWS, ignored by ibgateway.	1000
+PGID	User gid for user abc (linuxserver default user name). Specific to TWS, ignored by ibgateway.	1000
+PASSWD	Password for user abc (linuxserver default user name). Specific to TWS, ignored by ibgateway.	abc
+PASSWD_FILE	File containing password for user abc (linuxserver default user name). Specific to TWS, ignored by ibgateway.	abc
+Create an .env on root directory. Example .env file:
+
+TWS_USERID=myTwsAccountName
+TWS_PASSWORD=myTwsPassword
+# ib-gateway
+#TWS_SETTINGS_PATH=/home/ibgateway/Jts
+# tws
+#TWS_SETTINGS_PATH=/config/tws_settings
+TWS_SETTINGS_PATH=
+TWS_ACCEPT_INCOMING=
+TRADING_MODE=paper
+READ_ONLY_API=no
+VNC_SERVER_PASSWORD=myVncPassword
+TWOFA_TIMEOUT_ACTION=restart
+TWOFA_DEVICE=
+BYPASS_WARNING=
+AUTO_RESTART_TIME=11:59 PM
+AUTO_LOGOFF_TIME=
+TWS_COLD_RESTART=
+SAVE_TWS_SETTINGS=
+RELOGIN_AFTER_TWOFA_TIMEOUT=yes
+EXISTING_SESSION_DETECTED_ACTION=primary
+ALLOW_BLIND_TRADING=no
+TIME_ZONE=Europe/Zurich
+CUSTOM_CONFIG=
+SSH_TUNNEL=
+SSH_OPTIONS=
+SSH_ALIVE_INTERVAL=
+SSH_ALIVE_COUNT=
+SSH_PASSPHRASE=
+SSH_REMOTE_PORT=
+SSH_USER_TUNNEL=
+SSH_RESTART=
+SSH_VNC_PORT=
+Once docker-compose.yml and .env are in place you can start the container with:
+
+docker compose up
+You can use vnc for ib-gateway or RDP for TWS.
+
+Ports
+The following ports will be ready for usage on the ib-gateway container and docker host:
+
+Port	Description
+4003	TWS API port for live accounts. Through socat, internal TWS API port 4001. Mapped externally to 4001 in sample docker-compose.yml.
+4004	TWS API port for paper accounts. Through socat, internal TWS API port 4002. Mapped externally to 4002 in sample docker-compose.yml.
+5900	When VNC_SERVER_PASSWORD was defined, the VNC server port.
+TWS image uses the following ports
+
+Port	Description
+7498	TWS API port for live accounts. Through socat, internal TWS API port 7496. Mapped externally to 7496 in sample tws-docker-compose.yml.
+7499	TWS API port for paper accounts. Through socat, internal TWS API port 7497. Mapped externally to 7497 in sample tws-docker-compose.yml.
+3389	Port for RDP server. Mapped externally to 3370 in sample tws-docker-compose.yml.
+Utility socat is used to publish TWS API port from container's 127.0.0.1:4001/4002 to container's 0.0.0.0:4003/4004, the sample docker-file.yml maps ports to the host back to 4001/4002. This way any application can use the "standard" IB Gateway ports. For TWS 127.0.0.1:7496/7497 to container's 0.0.0.0:7498/7499, and tws-docker-file.yml will map ports to host back to 7496/7497.
+
+Note that with the above docker-compose.yml, ports are only exposed to the docker host (127.0.0.1), but not to the host network. To expose it to the host network change the port mappings on accordingly (remove the '127.0.0.1:'). Attention: See Leaving localhost
+
+Using TWS
+From 10.26.1h it's possible to run TWS in a container. tws-rdesktop image provides a desktop environment that allows to use TWS.
+
+Performance considerations for TWS
+tws-rdesktop has the following recomended settings.
+
+In tws-docker-compose.yml:
+
+set /dev/dri:/dev/dri
+shm_size: "1gb"
+seccomp:unconfined
+JAVA_HEAP_SIZE, depending your TWS you might need to increase it. See Increase Memory Size for TWS
+Volumes, set a volume for /tmp. ex tws_tmp:/tmp
+Volumes, set a volumen for /config
+The start up script will disable xfce compositing, as this has a significant impact on performance.
+
+Customizing the image
+Most if not all of the settings needed to run IB Gateway in a container are available as environment variables.
+
+However, if you need to go beyond what's available, the image can be customized by overwriting the default configuration files with custom ones. To do this you must set environment variable CUSTOM_CONFIG=yes. By setting CUSTOM_CONFIG=yes run.sh script will not replace environment variables on config files. You must provide config files ready to be used by IB gateway/TWS and IBC, please make sure that you are familiar with IBC settings.
+
+Image IB Gateway and IBC config file locations:
+
+App	Config file	Default
+IB Gateway	/home/ibgateway/Jts/jts.ini	jts.ini
+IBC	/home/ibgateway/ibc/config.ini	config.ini
+For TWS image config file locations are:
+
+App	Config file	Default
+TWS	/opt/ibkr/jts.ini	jts.ini
+IBC	/opt/ibc/config.ini	config.ini
+Sample settings:
+
+...
+    environment:
+      - CUSTOM_CONFIG: yes
+...
+    volumes:
+      - ${PWD}/config.ini:/home/ibgateway/ibc/config.ini
+      - ${PWD}/jts.ini:/home/ibgateway/Jts/jts.ini # for IB Gateway
+      - ${PWD}/jts.ini:/opt/ibkr/jts.ini # for TWS
+      - ${PWD}/config.ini:/opt/ibc/config.ini # for TWS
+...
+Preserve settings across containers
+You can preserve IB Gateway configuration by setting environment variable $TWS_SETTINGS_PATH and setting a volume
+
+...
+    environment:
+      - TWS_SETTINGS_PATH: /home/ibgateway/tws_settings # IB Gateway
+      - TWS_SETTINGS_PATH: /config/tws_settings # tws rdesktop
+...
+    volumes:
+      - ${PWD}/tws_settings:/home/ibgateway/tws_settings # IB Gateway
+      - ${PWD}/config:/config # for TWS we use linuxserver /config volume
+...
+For TWS it's recommended to use TWS_SETTINGS_PATH, as there is a good amount of data written to disk.
+
+Important: when you save your config in a volume, file jts.ini will be saved. TIME_ZONE will only be applied to jts.ini if the file does not exists (first run) but not once the file exists. This is to avoid overwriting your settings.
+
+Security Considerations
+Leaving localhost
+The IB API protocol is based on an unencrypted, unauthenticated, raw TCP socket connection between a client and the IB Gateway. If the port to IB API is open to the network, every device on it (including potential rogue devices) can access your IB account via the IB Gateway.
+
+Because of this, the default docker-compose.yml only exposes the IB API port to the localhost on the docker host, but not to the whole network.
+
+If you want to connect to IB Gateway from a remote device, consider adding an additional layer of security (e.g. TLS/SSL or SSH tunnel) to protect the 'plain text' TCP sockets against unauthorized access or manipulation.
+
+Possible IB API port configurations
+Some examples of possible configurations
+
+Available to localhost, this is the default setup provided in docker-compose.yml. Suitable for testing. It does not expose API port to host network, host must be trusted.
+
+Available to the host network. Unsecure configuration, suitable for short tests in a secure network. Not recommended.
+
+ports:
+  - "4001:4003"
+  - "4002:4004"
+  - "5900:5900"
+Available for other services in same docker network. Services with access to trader network can access IB Gateway through hostname ib-gateway (same than service name). Secure setup, although host should be trusted.
+
+services:
+  ib-gateway:
+    networks:
+      - trader
+#    ports: # commented out
+#      - "4001:4003"
+#      - "4002:4004"
+#      - "5900:5900"
+networks:
+  trader:
+SSH Tunnel, enable ssh tunnel as explained in ssh tunnel section. This will only make IB API port available through a secure SSH tunnel. Secure option if utilized correctly.
+
+SSH Tunnel
+You can optionally setup an SSH tunnel to avoid exposing IB Gateway port. The container DOES NOT run an SSH server (sshd), what it does is to create a remote tunnel using ssh client. So basically it will connect to an ssh server and expose IB Gateway port there.
+
+An example setup would be to run ib-gateway-docker with a sidecar ssh bastion and a jupyter-quant, which provides a fully working algorithmic trading environment. In simple terms ib gateway opens a remote port on ssh bastion and listen to connections on it. While jupyter-quant will open a local port that is tunneled into bastion on the same port opened by ib-gateway-docker. This combination of tunnels will expose IB API port into jupyter-quant making it available for use with ib_insync. The only port available to the outside world is the ssh bastion port, which has hardened security defaults and cryptographic key authentication.
+
+Sample ssh tunnels for reference.
+
+# on ib gateway - this is managed by the container
+ssh -NR 4001:localhost:4001 ibgateway@bastion
+# on juypter-quant container.
+eval $(ssh-agent) # start agent
+ssh-add # add keys to agent
+#  -f will send it to foreground
+ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -fNL 4001:localhost:4001 jupyter@bastion
+# on desktop connect to VNC
+ssh -o ServerAliveInterval=20 -o ServerAliveCountMax=3 -NL 5900:localhost:5900 trader@bastion
+It would look like this
+
+       _____________
+      |  IB Gateway | \   :4001
+       -------------  |
+                      |
+      _____________   |
+      | SSH Bastion | /   :4001
+      -------------   \
+                       |
+                       |
+      _______________  |
+     | Jupyter Quant |/  :4001
+      ---------------
+ib-gateway-docker is using ServerAliveInterval and ServerAliveCountMax ssh settings to keep the tunnel open. Additionally it will restart the tunnel automatically if it's stopped, and will keep trying to restart it.
+
+Minimal ssh tunnel setup:
+
+SSH_TUNNEL: set it to yes. This will NOT start socat and only start an ssh tunnel.
+SSH_USER_TUNNEL: The user name that ssh should use. It should be in the form user@server
+SSH_PASSPHRASE: Not mandatory, but strongly recommended. If set it will start ssh-agent and add ssh keys to agent. ssh will use ssh-agent.
+In addition to the environment variables listed above you need to pass ssh keys to ib-gateway-docker container. This is achieved through a volume mount
+
+...
+    volumes:
+      - ${PWD}/ssh:/home/ibgateway/.ssh # IB Gateway
+      - ${PWD}/config/ssh:/config/.ssh # TWS
+...
+TWS image will search ssh keys on HOME directory, so store keys on /config/.ssh
+
+Make sure that:
+
+you copy ssh keys with a standard name, ex ~/.ssh/id_rsa, ~/.ssh/id_ecdsa, ~/.ssh/id_ecdsa_sk, ~/.ssh/id_ed25519, ~/.ssh/id_ed25519_sk, or ~/.ssh/id_dsa
+keys should have proper permissions. ex chmod 600 -R $PWD/ssh/*
+you would need a $PWD/ssh/known_hosts file. Or pass SSH_OPTIONS=-o StrictHostKeyChecking=no, although this last option is NOT recommended for a production environment.
+and please make sure that you are familiar with ssh tunnels
+Credentials
+This image does not contain nor store any user credentials.
+
+They are provided as environment variable during the container startup and the host is responsible to properly protect it.
+
+From 10.29.1e and 10.19.2m it's possible to use docker secrets. If the _FILE environment variable is defined, then that file will be used to get credentials.
+
+Sample docker-compose.yml:
+
+name: algo-trader
+services:
+  ib-gateway:
+  ...
+  environment:
+    ...
+    TWS_PASSWORD_FILE: /run/secrets/tws_password
+    SSH_PASSPHRASE_FILE: /run/secrets/ssh_passphrase
+    VNC_SERVER_PASSWORD_FILE: /run/secrets/vnc_password
+    ...
+  secrets:
+    - tws_password
+    - ssh_passphrase
+    - vnc_password
+  ...
+secrets:
+  tws_password:
+    file: tws_password.txt
+  ssh_passphrase:
+    file: ssh_password.txt
+  vnc_password:
+    file: vnc_password.txt
+In "dicussions" section you will find full examples for ibgateway and tws-rdesktop
+
+RDP
+tws-rdesktop will create a new TLS certificate every time the container starts. You can create your own certificate following this instructions. Once this steps are put in place the same TLS certificate will be used every time, which will allow you to trust it in your RDP client.
+
+Troubleshooting socat and ssh
+In case you experience problems with the API connection, you can restart the socat process
+
+docker exec -it algo-trader-ib-gateway-1 pkill -x socat
+After SSH_RESTART seconds socat will restart the connection. If SSH_RESTART is not set, by default the restart period will be 5 seconds.
+
+For ssh tunnel,
+
+docker exec -it algo-trader-ib-gateway-1 pkill -x ssh
+The ssh tunnel will restart after 5 seconds if SSH_RESTART is not set, or the value in seconds defined in SSH_RESTART.
+
+IB Gateway installation files
+Note that the Dockerfile does not download IB Gateway installer files from IB homepage but from the github-releases of this project.
+
+This is because it shall be possible to (re-)build the image, targeting a specific Gateway version, but IB only provide download links for the latest or stable version (there is no 'old version' download archive).
+
+The installer files stored on releases have been downloaded from IB homepage and renamed to reflect the version.
+
+IF you feel adventurous and you want to download Gateway installer from IB homepage directly, or use your local installation file, change this line on Dockerfile RUN curl -sSL https://github.com/gnzsnz/ib-gateway-docker/raw/gh-pages/ibgateway-releases/ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh --output ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh to download (or copy) the file from the source you prefer.
+
+Example: change to RUN curl -sSL https://download2.interactivebrokers.com/installers/ibgateway/stable-standalone/ibgateway-stable-standalone-linux-x64.sh --output ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh for using current stable version from IB homepage.
+
+How to build locally step by step
+Clone this repo
+
+  git clone https://github.com/gnzsnz/ib-gateway-docker
+Change docker file to use your local IB Gateway installer file, instead of Loading it from this project releases: Open Dockerfile on editor and replace this lines:
+
+RUN curl -sSL https://github.com/gnzsnz/ib-gateway-docker/raw/gh-pages/ibgateway-releases/ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh \
+    --output ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh
+RUN curl -sSL https://github.com/gnzsnz/ib-gateway-docker/raw/gh-pages/ibgateway-releases/ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh.sha256 \
+    --output ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh.sha256
+with
+
+COPY ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh
+Remove RUN sha256sum --check ./ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh.sha256 from Dockerfile (unless you want to keep checksum-check)
+
+Download IB Gateway and name the file ibgateway-${IB_GATEWAY_VERSION}-standalone-linux-x64.sh, where {IB_GATEWAY_VERSION} must match the version as configured on Dockerfile (first line)
+
+Download IBC and name the file IBCLinux-3.22.0.zip, where {IBC_VERSION} must match the version as configured on Dockerfile
+
+Build and run: docker-compose up --build
+
+About
+Docker image with IB Gateway/TWS and IBC
+
+github.com/users/gnzsnz/packages/container/package/ib-gateway
+Topics
+docker trading trading-bot quant quantitative-finance algorithmic-trading tws tws-api ibgateway ibkr
+Resources
+ Readme
+License
+ MIT license
+ Activity
+Stars
+ 481 stars
+Watchers
+ 18 watching
+Forks
+ 103 forks
+Report repository
+Releases 111
+IB Gateway latest 10.38.1b
+Latest
+2 days ago
++ 110 releases
+Packages
+2
+ib-gateway
+tws-rdesktop
+Contributors
+13
+@efernandesng
+@github-actions[bot]
+@gnzsnz
+@mfrener
+@efernandes-ppb
+@electic
+@dependabot[bot]
+@bluPhy
+@kfiroo
+@fujiapple852
+@ownrepo1s
+@s-rwe
+Languages
+Shell
+87.2%
+ 
+Dockerfile
+12.8%
+Footer
+© 2025 GitHub, Inc.
+Footer navigation
+Terms
+Privacy
+Security
+Status
+Docs
+Contact
+Manage cookies
+Do not share my personal information
