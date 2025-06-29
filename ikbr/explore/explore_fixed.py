@@ -36,7 +36,7 @@ def connect(market_data_type='frozen'):
     - 'delayed' (3): Delayed market data (15 min delay, free)
     - 'delayed_frozen' (4): Delayed frozen data
     """
-    port = 4002 if os.getenv('TRADING_MODE', 'paper') == 'paper' else 4001
+    port = 4102 if os.getenv('TRADING_MODE', 'paper') == 'paper' else 4101
     
     print(f"Connecting to IB Gateway on port {port}...")
     
