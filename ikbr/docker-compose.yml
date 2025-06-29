@@ -10,7 +10,9 @@ services:
       TWS_ACCEPT_INCOMING: 'accept'
       VNC_SERVER_PASSWORD: ${VNC_PASSWORD:-password}
       READ_ONLY_API: ${READ_ONLY_API:-no}
-      TWOFA_TIMEOUT_ACTION: restart
+      TWOFA_DEVICE: ${TWOFA_DEVICE:-1}
+      TWOFA_TIMEOUT_ACTION: ${TWOFA_TIMEOUT_ACTION:-restart}
+      TWOFA_PHONE: ${TWOFA_PHONE}
       GATEWAY_OR_TWS: gateway
       TWS_TIMING_OF_RUN: StartDaily
       TWS_OVERRIDE_TIME_ZONE: America/New_York
@@ -21,9 +23,9 @@ services:
       JAVA_HEAP_SIZE: 768
       TWS_COLD_RESTART: '11:59 PM'
     ports:
-      - "127.0.0.1:4001:4003"  # IB Gateway API port (live) - container's socat port for live
-      - "127.0.0.1:4002:4004"  # IB Gateway API port (paper) - container's socat port for paper
-      - "127.0.0.1:5901:5900"  # VNC server for local debugging
+      - "127.0.0.1:4101:4003"  # IB Gateway API port (live) - container's socat port for live
+      - "127.0.0.1:4102:4004"  # IB Gateway API port (paper) - container's socat port for paper
+      - "127.0.0.1:5900:5900"  # VNC server for local debugging
     volumes:
       - ib-gateway-data:/home/ibgateway
     networks:

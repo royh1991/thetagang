@@ -6,6 +6,7 @@ with historical data.
 """
 
 import asyncio
+import os
 import time
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
@@ -14,12 +15,12 @@ import numpy as np
 import pandas as pd
 from loguru import logger
 
-from core.event_bus import EventBus, Event, EventTypes
+from core.event_bus import EventBus, Event, EventTypes, get_event_bus
 from core.market_data import MarketDataManager, TickData
 from core.order_manager import OrderManager, Signal
 from core.risk_manager import RiskManager, PortfolioRisk
 from strategies.base_strategy import BaseStrategy, StrategyConfig
-from .data_provider import BacktestDataProvider
+from .ib_data_provider import IBDataProvider
 from .mock_broker import MockBroker
 
 
@@ -36,6 +37,8 @@ class BacktestConfig:
     use_adjusted_close: bool = True
     fill_at_next_bar: bool = True  # More realistic fills
     random_seed: Optional[int] = None
+    use_ib_data: bool = True  # Always use real IB historical data
+    cache_dir: str = "backtest/cache"  # Cache directory for IB data
 
 
 @dataclass
@@ -170,10 +173,17 @@ class BacktestEngine:
     def __init__(self, config: BacktestConfig):
         self.config = config
         
-        # Initialize components
-        self.event_bus = EventBus("backtest")
-        self.data_provider = BacktestDataProvider(config)
-        self.mock_broker = MockBroker(config)
+        # Initialize components - use global event bus for compatibility
+        self.event_bus = get_event_bus()
+        
+        # Initialize data provider
+        self.ib_data_provider = IBDataProvider(config.cache_dir)
+            
+        self.mock_broker = MockBroker(
+            initial_capital=config.initial_capital,
+            commission_per_share=config.commission_per_share,
+            slippage_bps=config.slippage_pct * 10000  # Convert to basis points
+        )
         
         # Market data manager will be initialized per backtest
         self.market_data: Optional[MarketDataManager] = None
@@ -187,6 +197,10 @@ class BacktestEngine:
         self.equity_curve: List[Dict] = []
         self.trades: List[Dict] = []
         self.positions_history: List[Dict] = []
+        
+        # Historical data storage
+        self.historical_data: Dict[str, pd.DataFrame] = {}
+        self.current_ticks: Dict[str, List[TickData]] = {}
         
         # Set random seed if specified
         if config.random_seed:
@@ -213,16 +227,43 @@ class BacktestEngine:
             # Initialize components
             await self._initialize()
             
+            # Get all symbols from strategies
+            symbols = list(set(s for strategy in self.strategies for s in strategy.config.symbols))
+            
             # Load historical data
-            await self.data_provider.load_data(
-                symbols=[s for strategy in self.strategies for s in strategy.config.symbols],
-                start_date=self.config.start_date,
-                end_date=self.config.end_date
-            )
+            if self.config.use_ib_data:
+                # Connect to IB
+                await self.ib_data_provider.connect(port=4102 if os.getenv('TRADING_MODE', 'paper') == 'paper' else 4101)
+                
+                # Fetch data from IB
+                bar_size = "1 min" if self.config.data_frequency == "1min" else "5 mins"
+                self.historical_data = await self.ib_data_provider.fetch_multiple_symbols(
+                    symbols=symbols,
+                    start_date=self.config.start_date,
+                    end_date=self.config.end_date,
+                    bar_size=bar_size
+                )
+                
+                # Convert bars to ticks for each symbol
+                for symbol, bars_df in self.historical_data.items():
+                    self.current_ticks[symbol] = self.ib_data_provider.bars_to_ticks(bars_df, symbol)
+                
+                # Disconnect from IB
+                await self.ib_data_provider.disconnect()
+            else:
+                # Use synthetic data provider
+                await self.data_provider.load_data(
+                    symbols=symbols,
+                    start_date=self.config.start_date,
+                    end_date=self.config.end_date
+                )
             
             # Start all strategies
             for strategy in self.strategies:
                 await strategy.start()
+            
+            # Give strategies time to initialize
+            await asyncio.sleep(0.1)
             
             # Run simulation
             await self._run_simulation()
@@ -245,8 +286,7 @@ class BacktestEngine:
         # Start event bus
         await self.event_bus.start()
         
-        # Initialize mock broker
-        self.mock_broker.initialize(self.config.initial_capital)
+        # Mock broker is already initialized in __init__
         
         # Create managers with mock IB
         mock_ib = self.mock_broker.get_mock_ib()
@@ -276,64 +316,124 @@ class BacktestEngine:
     
     async def _run_simulation(self):
         """Run the main simulation loop"""
-        current_date = self.config.start_date
-        
-        while current_date <= self.config.end_date:
-            # Get data for current timestamp
-            tick_data = self.data_provider.get_tick_data(current_date)
+        if self.config.use_ib_data:
+            # Process IB tick data
+            # Collect all ticks and sort by timestamp
+            all_ticks = []
+            for symbol, ticks in self.current_ticks.items():
+                all_ticks.extend(ticks)
             
-            if tick_data:
-                # Update mock broker with current prices
-                self.mock_broker.update_prices(tick_data)
+            # Sort by timestamp
+            all_ticks.sort(key=lambda t: t.timestamp)
+            
+            # Process each tick
+            for i, tick in enumerate(all_ticks):
+                # Update mock broker with current price
+                self.mock_broker.update_prices({tick.symbol: tick})
                 
-                # Process each tick
-                for symbol, tick in tick_data.items():
-                    # Emit tick event
-                    await self.event_bus.emit(Event(
-                        EventTypes.TICK,
-                        tick,
-                        source="BacktestEngine"
-                    ))
+                # Update market data manager's tickers via MockIB
+                # This will trigger pendingTickersEvent which MarketDataManager listens to
+                self.mock_broker._mock_ib.update_prices({tick.symbol: {
+                    'last': tick.last,
+                    'bid': tick.bid,
+                    'ask': tick.ask,
+                    'high': tick.high,
+                    'low': tick.low,
+                    'close': tick.close,
+                    'volume': tick.volume
+                }})
+                
+                # Also emit tick event directly for strategies
+                await self.event_bus.emit(Event(
+                    EventTypes.TICK,
+                    tick,
+                    source="BacktestEngine"
+                ))
                 
                 # Process pending orders
                 await self.mock_broker.process_orders()
                 
-                # Record equity curve
-                portfolio_value = self.mock_broker.get_portfolio_value()
-                self.equity_curve.append({
-                    'timestamp': current_date,
-                    'value': portfolio_value,
-                    'cash': self.mock_broker.cash,
-                    'positions_value': portfolio_value - self.mock_broker.cash
-                })
+                # Record equity curve at regular intervals
+                # Convert timestamp to datetime if it's a float
+                tick_time = datetime.fromtimestamp(tick.timestamp) if isinstance(tick.timestamp, (int, float)) else tick.timestamp
+                last_time = datetime.fromtimestamp(self.equity_curve[-1]['timestamp']) if self.equity_curve and isinstance(self.equity_curve[-1]['timestamp'], (int, float)) else (self.equity_curve[-1]['timestamp'] if self.equity_curve else None)
                 
-                # Record positions
-                positions = self.mock_broker.get_positions()
-                if positions:
-                    self.positions_history.append({
-                        'timestamp': current_date,
-                        'positions': positions.copy()
+                if not self.equity_curve or not last_time or (tick_time - last_time).total_seconds() >= 60:
+                    portfolio_value = self.mock_broker.get_portfolio_value()
+                    self.equity_curve.append({
+                        'timestamp': tick_time,
+                        'value': portfolio_value,
+                        'cash': self.mock_broker.cash,
+                        'positions_value': portfolio_value - self.mock_broker.cash
                     })
+                    
+                    # Record positions
+                    positions = self.mock_broker.get_positions()
+                    if positions:
+                        self.positions_history.append({
+                            'timestamp': tick_time,
+                            'positions': positions.copy()
+                        })
+        else:
+            # Use synthetic data provider
+            current_date = self.config.start_date
             
-            # Advance time
-            if self.config.data_frequency == "1min":
-                current_date += timedelta(minutes=1)
-            elif self.config.data_frequency == "5min":
-                current_date += timedelta(minutes=5)
-            elif self.config.data_frequency == "1hour":
-                current_date += timedelta(hours=1)
-            else:
-                current_date += timedelta(days=1)
-            
-            # Skip weekends and after hours
-            if current_date.weekday() >= 5:  # Weekend
-                current_date = current_date + timedelta(days=7-current_date.weekday())
-                current_date = current_date.replace(hour=9, minute=30)
-            elif current_date.hour < 9 or (current_date.hour == 9 and current_date.minute < 30):
-                current_date = current_date.replace(hour=9, minute=30)
-            elif current_date.hour >= 16:
-                current_date = current_date + timedelta(days=1)
-                current_date = current_date.replace(hour=9, minute=30)
+            while current_date <= self.config.end_date:
+                # Get data for current timestamp
+                tick_data = self.data_provider.get_tick_data(current_date)
+                
+                if tick_data:
+                    # Update mock broker with current prices
+                    self.mock_broker.update_prices(tick_data)
+                    
+                    # Process each tick
+                    for symbol, tick in tick_data.items():
+                        # Emit tick event
+                        await self.event_bus.emit(Event(
+                            EventTypes.TICK,
+                            tick,
+                            source="BacktestEngine"
+                        ))
+                    
+                    # Process pending orders
+                    await self.mock_broker.process_orders()
+                    
+                    # Record equity curve
+                    portfolio_value = self.mock_broker.get_portfolio_value()
+                    self.equity_curve.append({
+                        'timestamp': current_date,
+                        'value': portfolio_value,
+                        'cash': self.mock_broker.cash,
+                        'positions_value': portfolio_value - self.mock_broker.cash
+                    })
+                    
+                    # Record positions
+                    positions = self.mock_broker.get_positions()
+                    if positions:
+                        self.positions_history.append({
+                            'timestamp': current_date,
+                            'positions': positions.copy()
+                        })
+                
+                # Advance time
+                if self.config.data_frequency == "1min":
+                    current_date += timedelta(minutes=1)
+                elif self.config.data_frequency == "5min":
+                    current_date += timedelta(minutes=5)
+                elif self.config.data_frequency == "1hour":
+                    current_date += timedelta(hours=1)
+                else:
+                    current_date += timedelta(days=1)
+                
+                # Skip weekends and after hours
+                if current_date.weekday() >= 5:  # Weekend
+                    current_date = current_date + timedelta(days=7-current_date.weekday())
+                    current_date = current_date.replace(hour=9, minute=30)
+                elif current_date.hour < 9 or (current_date.hour == 9 and current_date.minute < 30):
+                    current_date = current_date.replace(hour=9, minute=30)
+                elif current_date.hour >= 16:
+                    current_date = current_date + timedelta(days=1)
+                    current_date = current_date.replace(hour=9, minute=30)
         
         logger.info("Simulation completed")
     

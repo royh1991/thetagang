@@ -1,450 +1,419 @@
 """
 Mock Broker for Backtesting
 
-Simulates broker functionality including order execution,
-position tracking, and commission calculation.
+Simulates realistic order execution with slippage, commission, and market impact.
 """
 
-import time
-from collections import defaultdict
-from dataclasses import dataclass
-from typing import Dict, List, Optional, Any
+import asyncio
+from datetime import datetime
+from typing import Dict, List, Optional, Tuple
+from dataclasses import dataclass, field
 from enum import Enum
 import numpy as np
 from loguru import logger
 
-from core.order_manager import OrderInfo, OrderStatus, Signal
+from core.event_bus import EventBus, Event, EventTypes, get_event_bus
+from core.order_manager import Signal, OrderInfo, OrderStatus
 from core.market_data import TickData
+from .mock_ib import MockIB
 
 
-class FillModel(Enum):
-    """Order fill models"""
-    MARKET = "market"  # Fill at current market price
-    LIMIT = "limit"    # Fill only if limit price met
-    REALISTIC = "realistic"  # Add slippage and partial fills
+class OrderType(Enum):
+    """Order types"""
+    MARKET = "MARKET"
+    LIMIT = "LIMIT"
+    STOP = "STOP"
+    STOP_LIMIT = "STOP_LIMIT"
 
 
 @dataclass
-class MockPosition:
-    """Position in mock broker"""
+class Position:
+    """Position tracking"""
     symbol: str
     quantity: int
-    avg_cost: float
-    market_value: float = 0.0
-    unrealized_pnl: float = 0.0
+    avg_price: float
+    current_price: float = 0.0
     realized_pnl: float = 0.0
+    unrealized_pnl: float = 0.0
+    
+    def update_price(self, price: float):
+        """Update current price and unrealized PnL"""
+        self.current_price = price
+        self.unrealized_pnl = (price - self.avg_price) * self.quantity
+
+
+@dataclass
+class MockOrder:
+    """Mock order for backtesting"""
+    order_id: str
+    signal: Signal
+    status: OrderStatus = OrderStatus.PENDING
+    fill_price: Optional[float] = None
+    fill_time: Optional[datetime] = None
+    commission: float = 0.0
+    slippage: float = 0.0
+    remaining_quantity: int = 0
+    
+    def __post_init__(self):
+        self.remaining_quantity = self.signal.quantity
 
 
 class MockBroker:
     """
-    Mock broker for backtesting
+    Simulates a broker for backtesting
     
     Features:
     - Realistic order execution with slippage
     - Commission calculation
     - Position tracking
-    - Margin simulation
+    - P&L calculation
+    - Market impact simulation
     """
     
-    def __init__(self, config):
-        self.config = config
-        self.fill_model = FillModel.REALISTIC
+    def __init__(self, initial_capital: float = 100000, 
+                 commission_per_share: float = 0.01,
+                 min_commission: float = 1.0,
+                 slippage_bps: float = 5.0):  # 5 basis points default slippage
         
-        # Account state
-        self.cash: float = 0.0
-        self.initial_capital: float = 0.0
-        self.positions: Dict[str, MockPosition] = {}
-        self.pending_orders: List[OrderInfo] = []
+        self.initial_capital = initial_capital
+        self.cash = initial_capital
+        self.commission_per_share = commission_per_share
+        self.min_commission = min_commission
+        self.slippage_bps = slippage_bps / 10000  # Convert to decimal
         
-        # Market data
+        # Tracking
+        self.positions: Dict[str, Position] = {}
+        self.orders: Dict[str, MockOrder] = {}
+        self.order_history: List[MockOrder] = []
         self.current_prices: Dict[str, TickData] = {}
         
-        # Execution tracking
-        self.filled_orders: List[OrderInfo] = []
-        self.order_id_counter: int = 1
+        # Performance metrics
+        self.total_commission = 0.0
+        self.total_slippage = 0.0
+        self.num_trades = 0
         
-        # IB mock
-        self._mock_ib = None
-    
-    def initialize(self, initial_capital: float):
-        """Initialize broker with capital"""
-        self.cash = initial_capital
-        self.initial_capital = initial_capital
-        self.positions.clear()
-        self.pending_orders.clear()
-        self.filled_orders.clear()
-        logger.info(f"Mock broker initialized with ${initial_capital:,.2f}")
-    
-    def get_mock_ib(self):
-        """Get mock IB instance for managers"""
-        if not self._mock_ib:
-            self._mock_ib = MockIB(self)
-        return self._mock_ib
+        # Event bus
+        self.event_bus = get_event_bus()
+        
+        # Order ID counter
+        self._order_counter = 0
+        
+        # Create mock IB instance
+        self._mock_ib = MockIB()
+        
+    def get_next_order_id(self) -> str:
+        """Generate unique order ID"""
+        self._order_counter += 1
+        return f"MOCK_{self._order_counter:06d}"
     
     def update_prices(self, tick_data: Dict[str, TickData]):
         """Update current market prices"""
         self.current_prices.update(tick_data)
         
-        # Update position values
+        # Update position unrealized P&L
         for symbol, position in self.positions.items():
             if symbol in tick_data:
-                current_price = tick_data[symbol].last
-                position.market_value = position.quantity * current_price
-                position.unrealized_pnl = (current_price - position.avg_cost) * position.quantity
+                position.update_price(tick_data[symbol].last)
+        
+        # Update MockIB prices
+        price_dict = {}
+        for symbol, tick in tick_data.items():
+            price_dict[symbol] = {
+                'last': tick.last,
+                'bid': tick.bid,
+                'ask': tick.ask,
+                'high': tick.high,
+                'low': tick.low,
+                'close': tick.close,
+                'volume': tick.volume
+            }
+        self._mock_ib.update_prices(price_dict)
     
-    def submit_order(self, order_info: OrderInfo) -> bool:
-        """Submit an order to the mock broker"""
-        # Basic validation
-        signal = order_info.signal
+    async def submit_order(self, signal: Signal) -> Optional[OrderInfo]:
+        """Submit an order for execution"""
+        # Generate order ID
+        order_id = self.get_next_order_id()
         
-        # Check available cash for buy orders
+        # Validate order
+        if not self._validate_order(signal):
+            await self._emit_order_rejected(order_id, signal, "Order validation failed")
+            return None
+        
+        # Create mock order
+        mock_order = MockOrder(
+            order_id=order_id,
+            signal=signal,
+            status=OrderStatus.PENDING
+        )
+        
+        self.orders[order_id] = mock_order
+        
+        # Create order info
+        order_info = OrderInfo(
+            order_id=order_id,
+            signal=signal,
+            status=OrderStatus.PENDING,
+            timestamp=datetime.now()
+        )
+        
+        # Emit order submitted event
+        await self._emit_order_submitted(order_info)
+        
+        # Process immediately if market order
+        if signal.order_type == "MARKET":
+            await self._execute_order(mock_order)
+        
+        return order_info
+    
+    def _validate_order(self, signal: Signal) -> bool:
+        """Validate order before submission"""
+        # Check if symbol has price data
+        if signal.symbol not in self.current_prices:
+            logger.warning(f"No price data for {signal.symbol}")
+            return False
+        
+        # Check buying power
         if signal.is_buy:
-            required_cash = self._calculate_required_cash(signal)
+            tick = self.current_prices[signal.symbol]
+            required_cash = tick.ask * signal.quantity * 1.02  # Include buffer
             if required_cash > self.cash:
-                logger.warning(f"Insufficient cash for order: required=${required_cash:.2f}, "
-                             f"available=${self.cash:.2f}")
-                order_info.status = OrderStatus.REJECTED
-                order_info.error_message = "Insufficient funds"
+                logger.warning(f"Insufficient buying power: need ${required_cash:.2f}, have ${self.cash:.2f}")
                 return False
-        
-        # Check position for sell orders
-        if signal.is_sell:
+        else:
+            # Check if we have position to sell
             position = self.positions.get(signal.symbol)
             if not position or position.quantity < signal.quantity:
-                logger.warning(f"Insufficient position for sell order")
-                order_info.status = OrderStatus.REJECTED
-                order_info.error_message = "Insufficient position"
+                available = position.quantity if position else 0
+                logger.warning(f"Insufficient position: trying to sell {signal.quantity}, have {available}")
                 return False
         
-        # Accept order
-        order_info.status = OrderStatus.SUBMITTED
-        self.pending_orders.append(order_info)
-        logger.debug(f"Order submitted: {signal.symbol} {signal.action} {signal.quantity}")
         return True
     
-    def cancel_order(self, order_info: OrderInfo) -> bool:
-        """Cancel a pending order"""
-        if order_info in self.pending_orders:
-            self.pending_orders.remove(order_info)
-            order_info.status = OrderStatus.CANCELLED
-            logger.debug(f"Order cancelled: {order_info.order_id}")
-            return True
-        return False
-    
-    async def process_orders(self):
-        """Process pending orders with current market data"""
-        filled_orders = []
+    async def _execute_order(self, mock_order: MockOrder):
+        """Execute an order"""
+        signal = mock_order.signal
+        tick = self.current_prices.get(signal.symbol)
         
-        for order_info in self.pending_orders[:]:  # Copy list to allow modification
-            signal = order_info.signal
-            
-            if signal.symbol not in self.current_prices:
-                continue
-            
-            tick = self.current_prices[signal.symbol]
-            
-            # Check if order should be filled
-            should_fill, fill_price = self._check_fill(order_info, tick)
-            
-            if should_fill:
-                # Apply slippage
-                if self.fill_model == FillModel.REALISTIC:
-                    slippage = self.config.slippage_pct * fill_price
-                    if signal.is_buy:
-                        fill_price += slippage
-                    else:
-                        fill_price -= slippage
-                
-                # Execute fill
-                self._execute_fill(order_info, fill_price)
-                filled_orders.append(order_info)
-                self.pending_orders.remove(order_info)
+        if not tick:
+            mock_order.status = OrderStatus.REJECTED
+            await self._emit_order_rejected(mock_order.order_id, signal, "No market data")
+            return
         
-        return filled_orders
-    
-    def _check_fill(self, order_info: OrderInfo, tick: TickData) -> tuple[bool, float]:
-        """Check if order should be filled"""
-        signal = order_info.signal
-        
-        if signal.order_type == "MARKET":
-            # Market orders always fill
-            if signal.is_buy:
-                return True, tick.ask or tick.last
-            else:
-                return True, tick.bid or tick.last
-        
-        elif signal.order_type == "LIMIT":
-            # Limit orders fill if price is favorable
-            if signal.is_buy and tick.ask <= signal.limit_price:
-                return True, min(tick.ask, signal.limit_price)
-            elif signal.is_sell and tick.bid >= signal.limit_price:
-                return True, max(tick.bid, signal.limit_price)
-        
-        elif signal.order_type == "STOP":
-            # Stop orders trigger and convert to market
-            if signal.is_buy and tick.last >= signal.stop_price:
-                return True, tick.ask or tick.last
-            elif signal.is_sell and tick.last <= signal.stop_price:
-                return True, tick.bid or tick.last
-        
-        return False, 0.0
-    
-    def _execute_fill(self, order_info: OrderInfo, fill_price: float):
-        """Execute order fill"""
-        signal = order_info.signal
+        # Calculate fill price with slippage
+        if signal.is_buy:
+            base_price = tick.ask
+            slippage = base_price * self.slippage_bps * np.random.uniform(0.5, 1.5)
+            fill_price = base_price + slippage
+        else:
+            base_price = tick.bid
+            slippage = base_price * self.slippage_bps * np.random.uniform(0.5, 1.5)
+            fill_price = base_price - slippage
         
         # Calculate commission
-        commission = signal.quantity * self.config.commission_per_share
+        commission = max(
+            self.commission_per_share * signal.quantity,
+            self.min_commission
+        )
         
-        # Update order info
-        order_info.status = OrderStatus.FILLED
-        order_info.fill_price = fill_price
-        order_info.fill_time = time.time()
-        order_info.commission = commission
+        # Update order
+        mock_order.fill_price = fill_price
+        mock_order.fill_time = tick.timestamp
+        mock_order.commission = commission
+        mock_order.slippage = slippage * signal.quantity
+        mock_order.status = OrderStatus.FILLED
+        mock_order.remaining_quantity = 0
         
-        # Update positions
+        # Update cash
         if signal.is_buy:
-            self._add_position(signal.symbol, signal.quantity, fill_price)
             self.cash -= (fill_price * signal.quantity + commission)
         else:
-            pnl = self._reduce_position(signal.symbol, signal.quantity, fill_price)
             self.cash += (fill_price * signal.quantity - commission)
-            order_info.realized_pnl = pnl
         
-        self.filled_orders.append(order_info)
+        # Update positions
+        self._update_positions(signal, fill_price)
         
-        logger.info(f"Order filled: {signal.symbol} {signal.action} {signal.quantity} "
-                   f"@ ${fill_price:.2f}, commission=${commission:.2f}")
+        # Track metrics
+        self.total_commission += commission
+        self.total_slippage += abs(slippage * signal.quantity)
+        self.num_trades += 1
+        
+        # Move to history
+        self.order_history.append(mock_order)
+        del self.orders[mock_order.order_id]
+        
+        # Create order info with fill details
+        order_info = OrderInfo(
+            order_id=mock_order.order_id,
+            signal=signal,
+            status=OrderStatus.FILLED,
+            timestamp=mock_order.fill_time,
+            fill_price=fill_price,
+            commission=commission
+        )
+        
+        # Emit order filled event
+        await self._emit_order_filled(order_info)
+        
+        logger.info(f"Executed {signal.action} {signal.quantity} {signal.symbol} @ ${fill_price:.2f}")
     
-    def _add_position(self, symbol: str, quantity: int, price: float):
-        """Add to or create position"""
-        if symbol in self.positions:
-            position = self.positions[symbol]
-            total_cost = position.avg_cost * position.quantity + price * quantity
-            position.quantity += quantity
-            position.avg_cost = total_cost / position.quantity
+    def _update_positions(self, signal: Signal, fill_price: float):
+        """Update positions after fill"""
+        symbol = signal.symbol
+        
+        if signal.is_buy:
+            if symbol in self.positions:
+                # Add to existing position
+                position = self.positions[symbol]
+                total_cost = position.avg_price * position.quantity + fill_price * signal.quantity
+                position.quantity += signal.quantity
+                position.avg_price = total_cost / position.quantity
+            else:
+                # New position
+                self.positions[symbol] = Position(
+                    symbol=symbol,
+                    quantity=signal.quantity,
+                    avg_price=fill_price
+                )
         else:
-            self.positions[symbol] = MockPosition(
-                symbol=symbol,
-                quantity=quantity,
-                avg_cost=price
-            )
+            # Sell
+            if symbol in self.positions:
+                position = self.positions[symbol]
+                
+                # Calculate realized P&L
+                realized_pnl = (fill_price - position.avg_price) * signal.quantity
+                position.realized_pnl += realized_pnl
+                
+                # Update position
+                position.quantity -= signal.quantity
+                
+                # Remove if fully closed
+                if position.quantity == 0:
+                    del self.positions[symbol]
     
-    def _reduce_position(self, symbol: str, quantity: int, price: float) -> float:
-        """Reduce position and calculate P&L"""
-        if symbol not in self.positions:
-            return 0.0
-        
-        position = self.positions[symbol]
-        
-        # Calculate realized P&L
-        pnl = (price - position.avg_cost) * quantity
-        position.realized_pnl += pnl
-        
-        # Reduce position
-        position.quantity -= quantity
-        
-        # Remove if position is closed
-        if position.quantity == 0:
-            del self.positions[symbol]
-        
-        return pnl
-    
-    def _calculate_required_cash(self, signal: Signal) -> float:
-        """Calculate cash required for order"""
-        if signal.symbol not in self.current_prices:
-            return float('inf')
-        
-        tick = self.current_prices[signal.symbol]
-        
-        if signal.order_type == "MARKET":
-            price = tick.ask or tick.last
-        elif signal.order_type == "LIMIT":
-            price = signal.limit_price
-        else:
-            price = tick.last
-        
-        return price * signal.quantity + signal.quantity * self.config.commission_per_share
+    async def process_orders(self):
+        """Process pending orders (limit, stop, etc.)"""
+        for order_id, mock_order in list(self.orders.items()):
+            if mock_order.status != OrderStatus.PENDING:
+                continue
+            
+            signal = mock_order.signal
+            tick = self.current_prices.get(signal.symbol)
+            
+            if not tick:
+                continue
+            
+            # Check limit orders
+            if signal.order_type == "LIMIT":
+                if signal.is_buy and tick.ask <= signal.limit_price:
+                    await self._execute_order(mock_order)
+                elif not signal.is_buy and tick.bid >= signal.limit_price:
+                    await self._execute_order(mock_order)
+            
+            # Check stop orders
+            elif signal.order_type == "STOP":
+                if signal.stop_price:
+                    if signal.is_buy and tick.ask >= signal.stop_price:
+                        await self._execute_order(mock_order)
+                    elif not signal.is_buy and tick.bid <= signal.stop_price:
+                        await self._execute_order(mock_order)
     
     def get_portfolio_value(self) -> float:
-        """Get total portfolio value"""
-        positions_value = sum(p.market_value for p in self.positions.values())
+        """Calculate total portfolio value"""
+        positions_value = sum(
+            position.quantity * position.current_price 
+            for position in self.positions.values()
+        )
         return self.cash + positions_value
     
-    def get_positions(self) -> Dict[str, MockPosition]:
+    def get_positions(self) -> Dict[str, Position]:
         """Get current positions"""
         return self.positions.copy()
     
-    def get_account_info(self) -> Dict[str, Any]:
-        """Get account information"""
+    def get_performance_metrics(self) -> Dict[str, float]:
+        """Get performance metrics"""
         portfolio_value = self.get_portfolio_value()
-        positions_value = sum(p.market_value for p in self.positions.values())
+        total_return = (portfolio_value - self.initial_capital) / self.initial_capital
         
         return {
-            'cash': self.cash,
-            'portfolio_value': portfolio_value,
-            'positions_value': positions_value,
-            'unrealized_pnl': sum(p.unrealized_pnl for p in self.positions.values()),
-            'realized_pnl': sum(p.realized_pnl for p in self.positions.values()),
-            'initial_capital': self.initial_capital,
-            'total_return': (portfolio_value / self.initial_capital - 1) * 100
+            "portfolio_value": portfolio_value,
+            "cash": self.cash,
+            "total_return": total_return,
+            "total_commission": self.total_commission,
+            "total_slippage": self.total_slippage,
+            "num_trades": self.num_trades,
+            "avg_commission": self.total_commission / max(self.num_trades, 1),
+            "avg_slippage": self.total_slippage / max(self.num_trades, 1)
         }
-
-
-class MockIB:
-    """Mock IB API for backtesting"""
     
-    def __init__(self, broker: MockBroker):
-        self.broker = broker
-        self.pendingTickersEvent = MockEvent()
-        self.orderStatusEvent = MockEvent()
-        self.execDetailsEvent = MockEvent()
-        self.errorEvent = MockEvent()
-        self.newOrderEvent = MockEvent()
+    async def cancel_order(self, order_id: str) -> bool:
+        """Cancel a pending order"""
+        if order_id in self.orders:
+            mock_order = self.orders[order_id]
+            if mock_order.status == OrderStatus.PENDING:
+                mock_order.status = OrderStatus.CANCELLED
+                self.order_history.append(mock_order)
+                del self.orders[order_id]
+                
+                # Emit cancelled event
+                order_info = OrderInfo(
+                    order_id=order_id,
+                    signal=mock_order.signal,
+                    status=OrderStatus.CANCELLED,
+                    timestamp=datetime.now()
+                )
+                await self._emit_order_cancelled(order_info)
+                return True
+        return False
     
-    def connect(self, *args, **kwargs):
-        """Mock connection"""
-        pass
+    # Event emission methods
+    async def _emit_order_submitted(self, order_info: OrderInfo):
+        """Emit order submitted event"""
+        await self.event_bus.emit(Event(
+            EventTypes.ORDER_SUBMITTED,
+            {"order_info": order_info},
+            source="MockBroker"
+        ))
     
-    def disconnect(self):
-        """Mock disconnect"""
-        pass
+    async def _emit_order_filled(self, order_info: OrderInfo):
+        """Emit order filled event"""
+        await self.event_bus.emit(Event(
+            EventTypes.ORDER_FILLED,
+            {"order_info": order_info},
+            source="MockBroker"
+        ))
     
-    def qualifyContracts(self, contract):
-        """Mock qualify contracts"""
-        pass
+    async def _emit_order_rejected(self, order_id: str, signal: Signal, reason: str):
+        """Emit order rejected event"""
+        await self.event_bus.emit(Event(
+            EventTypes.ORDER_REJECTED,
+            {
+                "order_id": order_id,
+                "signal": signal,
+                "reason": reason
+            },
+            source="MockBroker"
+        ))
     
-    def placeOrder(self, contract, order):
-        """Mock place order"""
-        # Create order info
-        from ikbr.core.order_manager import Signal, OrderInfo
-        
-        signal = Signal(
-            action=order.action,
-            symbol=contract.symbol,
-            quantity=order.totalQuantity,
-            order_type=order.orderType,
-            limit_price=getattr(order, 'lmtPrice', None),
-            stop_price=getattr(order, 'auxPrice', None)
-        )
-        
-        order_info = OrderInfo(
-            order_id=str(self.broker.order_id_counter),
-            signal=signal,
-            ib_order=order
-        )
-        
-        self.broker.order_id_counter += 1
-        
-        # Submit to broker
-        if self.broker.submit_order(order_info):
-            # Create mock trade object
-            trade = MockTrade(order, order_info)
-            return trade
-        else:
-            # Trigger error event
-            self.errorEvent.emit(order.orderId, 201, "Order rejected", contract)
-            return None
+    async def _emit_order_cancelled(self, order_info: OrderInfo):
+        """Emit order cancelled event"""
+        await self.event_bus.emit(Event(
+            EventTypes.ORDER_CANCELLED,
+            {"order_info": order_info},
+            source="MockBroker"
+        ))
     
-    def cancelOrder(self, order):
-        """Mock cancel order"""
-        # Find order in pending orders
-        for order_info in self.broker.pending_orders:
-            if order_info.ib_order == order:
-                self.broker.cancel_order(order_info)
-                break
+    def reset(self, initial_capital: Optional[float] = None):
+        """Reset broker state"""
+        self.cash = initial_capital or self.initial_capital
+        self.positions.clear()
+        self.orders.clear()
+        self.order_history.clear()
+        self.current_prices.clear()
+        self.total_commission = 0.0
+        self.total_slippage = 0.0
+        self.num_trades = 0
+        self._order_counter = 0
     
-    def reqMktData(self, contract, *args, **kwargs):
-        """Mock market data request"""
-        return MockTicker(contract)
-    
-    def cancelMktData(self, contract):
-        """Mock cancel market data"""
-        pass
-    
-    def positions(self):
-        """Mock positions"""
-        positions = []
-        for symbol, pos in self.broker.positions.items():
-            mock_pos = type('Position', (), {
-                'contract': type('Contract', (), {'symbol': symbol}),
-                'position': pos.quantity,
-                'marketValue': pos.market_value,
-                'unrealizedPNL': pos.unrealized_pnl,
-                'realizedPNL': pos.realized_pnl,
-                'avgCost': pos.avg_cost,
-                'marketPrice': pos.market_value / pos.quantity if pos.quantity else 0
-            })
-            positions.append(mock_pos)
-        return positions
-    
-    def accountValues(self):
-        """Mock account values"""
-        values = []
-        account_info = self.broker.get_account_info()
-        
-        # Create mock account values
-        for tag, value in [
-            ('TotalCashBalance', account_info['cash']),
-            ('NetLiquidation', account_info['portfolio_value']),
-            ('UnrealizedPnL', account_info['unrealized_pnl']),
-            ('RealizedPnL', account_info['realized_pnl'])
-        ]:
-            mock_av = type('AccountValue', (), {
-                'tag': tag,
-                'value': str(value),
-                'currency': 'USD'
-            })
-            values.append(mock_av)
-        
-        return values
-    
-    async def reqHistoricalDataAsync(self, contract, *args, **kwargs):
-        """Mock historical data request"""
-        # Return empty list for backtesting
-        return []
-
-
-class MockEvent:
-    """Mock event for IB API compatibility"""
-    
-    def __init__(self):
-        self.handlers = []
-    
-    def __iadd__(self, handler):
-        self.handlers.append(handler)
-        return self
-    
-    def emit(self, *args, **kwargs):
-        for handler in self.handlers:
-            handler(*args, **kwargs)
-
-
-class MockTrade:
-    """Mock trade object"""
-    
-    def __init__(self, order, order_info):
-        self.order = order
-        self.contract = type('Contract', (), {'symbol': order_info.signal.symbol})
-        self.orderStatus = type('OrderStatus', (), {
-            'status': 'Submitted',
-            'filled': 0,
-            'remaining': order.totalQuantity,
-            'avgFillPrice': 0.0
-        })
-
-
-class MockTicker:
-    """Mock ticker object"""
-    
-    def __init__(self, contract):
-        self.contract = contract
-        self.bid = float('nan')
-        self.ask = float('nan')
-        self.last = float('nan')
-        self.bidSize = 0
-        self.askSize = 0
-        self.volume = 0
-        self.high = float('nan')
-        self.low = float('nan')
-        self.close = float('nan')
+    def get_mock_ib(self):
+        """Return mock IB connection for compatibility"""
+        return self._mock_ib

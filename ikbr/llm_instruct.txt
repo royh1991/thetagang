@@ -32,6 +32,52 @@ Host → Container (socat) → IB Gateway Internal
 
 **Critical Understanding**: The container uses socat to forward connections from external ports (4003/4004) to internal IB Gateway ports (4001/4002).
 
+### ⚠️ CRITICAL PORT FORWARDING TROUBLESHOOTING
+
+**Problem**: IB Gateway container shows "Connecting to server..." indefinitely and never authenticates.
+
+**Root Cause**: Port conflicts on the host machine prevent Docker from properly forwarding connections to the container.
+
+**How to Diagnose**:
+1. Check if ports 4001-4002 are already in use:
+   ```bash
+   lsof -i :4001-4004 | grep LISTEN
+   ```
+2. Common culprits:
+   - Colima SSH processes (on macOS with Docker Desktop alternatives)
+   - Other Docker containers
+   - Local IB Gateway/TWS installations
+
+**Symptoms of Port Conflict**:
+- Container logs show "Connecting to server..." but never "Authenticating"
+- No 2FA prompt appears even on fresh container starts
+- API connection attempts timeout
+- VNC shows repeated connection attempts (e.g., "attempt 7 to connect")
+
+**Solution**: Change port mappings to avoid conflicts:
+```yaml
+# docker-compose.yml
+ports:
+  - "127.0.0.1:4101:4003"  # Changed from 4001 to avoid conflicts
+  - "127.0.0.1:4102:4004"  # Changed from 4002 to avoid conflicts
+  - "127.0.0.1:5900:5900"  # VNC port
+```
+
+**Update all references**:
+```python
+# In .env file
+IB_GATEWAY_PORT=4102         # Paper trading (was 4002)
+IB_GATEWAY_PORT_LIVE=4101    # Live trading (was 4001)
+
+# In Python code
+port = 4102 if os.getenv('TRADING_MODE', 'paper') == 'paper' else 4101
+```
+
+**Verification**: After fixing ports, you should see:
+- "IBC: Authenticating..." in logs
+- "IBC: Login has completed" when successful
+- API connections work: `ib.connect('localhost', 4102, clientId=1)`
+
 ## Implementation Details
 
 ### 1. Docker Configuration

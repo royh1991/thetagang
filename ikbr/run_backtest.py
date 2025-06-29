@@ -1,17 +1,19 @@
 """
-Run Backtest Example
+Run Backtest with CLI Options
 
-Demonstrates backtesting the momentum and mean reversion strategies.
+Comprehensive backtesting with real IBKR data and detailed reporting.
 """
 
 import asyncio
 import sys
+import argparse
 from datetime import datetime, timedelta
 from loguru import logger
 
 sys.path.insert(0, '.')
 
 from backtest.engine import BacktestEngine, BacktestConfig
+from backtest.report_generator import ReportGenerator
 from strategies.examples.momentum_strategy import MomentumStrategy, MomentumConfig
 from strategies.examples.mean_reversion_strategy import MeanReversionStrategy, MeanReversionConfig
 
@@ -114,57 +116,209 @@ async def run_mean_reversion_backtest():
 
 
 async def main():
-    """Run all backtests"""
+    """Run backtests with CLI options"""
+    parser = argparse.ArgumentParser(description="Run IBKR Strategy Backtests")
+    
+    # Strategy selection
+    parser.add_argument('--strategy', type=str, default='all',
+                       choices=['momentum', 'mean_reversion', 'all'],
+                       help='Strategy to backtest')
+    
+    # Date range
+    parser.add_argument('--days', type=int, default=30,
+                       help='Number of days to backtest')
+    parser.add_argument('--start-date', type=str,
+                       help='Start date (YYYY-MM-DD)')
+    parser.add_argument('--end-date', type=str,
+                       help='End date (YYYY-MM-DD)')
+    
+    # Symbols
+    parser.add_argument('--symbols', type=str, nargs='+',
+                       default=['SPY', 'AAPL', 'TSLA'],
+                       help='Symbols to trade')
+    
+    # Capital and risk
+    parser.add_argument('--capital', type=float, default=100000,
+                       help='Initial capital')
+    parser.add_argument('--position-size', type=float, default=0.3,
+                       help='Position size as fraction of capital')
+    
+    # Data options
+    parser.add_argument('--use-ib-data', action='store_true', default=True,
+                       help='Use real IB historical data')
+    parser.add_argument('--no-ib-data', dest='use_ib_data', action='store_false',
+                       help='Use synthetic data instead of IB')
+    parser.add_argument('--frequency', type=str, default='5min',
+                       choices=['1min', '5min', '15min', '1hour'],
+                       help='Data frequency')
+    
+    # Reporting
+    parser.add_argument('--report', action='store_true', default=True,
+                       help='Generate HTML report')
+    parser.add_argument('--no-report', dest='report', action='store_false',
+                       help='Skip report generation')
+    
+    # Logging
+    parser.add_argument('--verbose', action='store_true',
+                       help='Enable verbose logging')
+    
+    args = parser.parse_args()
+    
+    # Setup logging
     logger.remove()
-    logger.add(sys.stdout, level="INFO")
+    log_level = "DEBUG" if args.verbose else "INFO"
+    logger.add(sys.stdout, level=log_level)
     logger.add("logs/backtest.log", level="DEBUG")
     
+    # Determine date range
+    if args.start_date and args.end_date:
+        start_date = datetime.strptime(args.start_date, '%Y-%m-%d')
+        end_date = datetime.strptime(args.end_date, '%Y-%m-%d')
+    else:
+        end_date = datetime.now()
+        start_date = end_date - timedelta(days=args.days)
+    
     logger.info("="*60)
-    logger.info("STRATEGY BACKTEST DEMONSTRATION")
+    logger.info("IBKR STRATEGY BACKTEST")
+    logger.info("="*60)
+    logger.info(f"Date Range: {start_date.date()} to {end_date.date()}")
+    logger.info(f"Symbols: {', '.join(args.symbols)}")
+    logger.info(f"Initial Capital: ${args.capital:,.2f}")
+    logger.info(f"Data Source: {'IB Historical' if args.use_ib_data else 'Synthetic'}")
     logger.info("="*60)
     
-    # Run backtests
-    momentum_result = await run_momentum_backtest()
-    mean_reversion_result = await run_mean_reversion_backtest()
+    # Create backtest config
+    config = BacktestConfig(
+        start_date=start_date,
+        end_date=end_date,
+        initial_capital=args.capital,
+        data_frequency=args.frequency,
+        use_ib_data=args.use_ib_data
+    )
     
-    # Compare strategies
+    # Report generator
+    report_gen = ReportGenerator() if args.report else None
+    
+    results = []
+    
+    # Run selected strategies
+    if args.strategy in ['momentum', 'all']:
+        logger.info("\nRunning Momentum Strategy Backtest...")
+        
+        engine = BacktestEngine(config)
+        
+        strategy_config = MomentumConfig(
+            symbols=args.symbols,
+            max_positions=min(3, len(args.symbols)),
+            position_size_pct=args.position_size,
+            stop_loss_pct=0.02,
+            take_profit_pct=0.05,
+            metadata={
+                'lookback_period': 20,
+                'momentum_threshold': 0.015
+            }
+        )
+        
+        await engine._initialize()
+        engine.add_strategy(MomentumStrategy, strategy_config)
+        
+        result = await engine.run()
+        results.append(('Momentum', result))
+        
+        if report_gen:
+            report = report_gen.generate_report(
+                result, 
+                'Momentum_Strategy'
+            )
+            logger.info(f"Report generated successfully")
+    
+    if args.strategy in ['mean_reversion', 'all']:
+        logger.info("\nRunning Mean Reversion Strategy Backtest...")
+        
+        engine = BacktestEngine(config)
+        
+        strategy_config = MeanReversionConfig(
+            symbols=args.symbols[:2],  # Mean reversion works better with fewer symbols
+            max_positions=2,
+            position_size_pct=args.position_size * 1.5,  # Larger positions
+            stop_loss_pct=0.03,
+            take_profit_pct=0.02,
+            metadata={
+                'ma_period': 20,
+                'rsi_oversold': 30,
+                'rsi_overbought': 70
+            }
+        )
+        
+        await engine._initialize()
+        engine.add_strategy(MeanReversionStrategy, strategy_config)
+        
+        result = await engine.run()
+        results.append(('Mean Reversion', result))
+        
+        if report_gen:
+            report = report_gen.generate_report(
+                result, 
+                'MeanReversion_Strategy'
+            )
+            logger.info(f"Report generated successfully")
+    
+    # Compare results if multiple strategies
+    if len(results) > 1:
+        logger.info("\n" + "="*60)
+        logger.info("STRATEGY COMPARISON")
+        logger.info("="*60)
+        
+        # Header
+        header = f"{'Metric':<20}"
+        for name, _ in results:
+            header += f" {name:>15}"
+        logger.info(header)
+        logger.info("-" * len(header))
+        
+        # Metrics
+        metrics = [
+            ('Total Return', lambda r: f"{r.total_return:.2%}"),
+            ('Annualized Return', lambda r: f"{r.annualized_return:.2%}"),
+            ('Sharpe Ratio', lambda r: f"{r.sharpe_ratio:.2f}"),
+            ('Max Drawdown', lambda r: f"{r.max_drawdown:.2%}"),
+            ('Win Rate', lambda r: f"{r.win_rate:.2%}"),
+            ('Total Trades', lambda r: f"{r.total_trades:d}"),
+            ('Profit Factor', lambda r: f"{r.profit_factor:.2f}")
+        ]
+        
+        for metric_name, formatter in metrics:
+            line = f"{metric_name:<20}"
+            for _, result in results:
+                line += f" {formatter(result):>15}"
+            logger.info(line)
+    
     logger.info("\n" + "="*60)
-    logger.info("STRATEGY COMPARISON")
-    logger.info("="*60)
+    logger.info("Backtest Complete!")
     
-    logger.info(f"{'Metric':<20} {'Momentum':>15} {'Mean Reversion':>15}")
-    logger.info("-"*50)
-    logger.info(f"{'Total Return':<20} {momentum_result.total_return:>14.2%} {mean_reversion_result.total_return:>15.2%}")
-    logger.info(f"{'Sharpe Ratio':<20} {momentum_result.sharpe_ratio:>14.2f} {mean_reversion_result.sharpe_ratio:>15.2f}")
-    logger.info(f"{'Max Drawdown':<20} {momentum_result.max_drawdown:>14.2%} {mean_reversion_result.max_drawdown:>15.2%}")
-    logger.info(f"{'Win Rate':<20} {momentum_result.win_rate:>14.2%} {mean_reversion_result.win_rate:>15.2%}")
-    logger.info(f"{'Total Trades':<20} {momentum_result.total_trades:>14d} {mean_reversion_result.total_trades:>15d}")
-    
-    # Plot results if matplotlib available
-    try:
-        import matplotlib.pyplot as plt
-        fig, (ax1, ax2) = plt.subplots(2, 1, figsize=(12, 8))
-        
-        # Momentum strategy
-        momentum_result.equity_curve['value'].plot(ax=ax1, label='Momentum', color='blue')
-        ax1.set_title('Momentum Strategy Equity Curve')
-        ax1.set_ylabel('Portfolio Value ($)')
-        ax1.grid(True)
-        ax1.legend()
-        
-        # Mean reversion strategy
-        mean_reversion_result.equity_curve['value'].plot(ax=ax2, label='Mean Reversion', color='green')
-        ax2.set_title('Mean Reversion Strategy Equity Curve')
-        ax2.set_ylabel('Portfolio Value ($)')
-        ax2.grid(True)
-        ax2.legend()
-        
-        plt.tight_layout()
-        plt.savefig('backtest_results.png')
-        logger.info("\nBacktest charts saved to backtest_results.png")
-        
-    except ImportError:
-        logger.info("\nInstall matplotlib to see charts: pip install matplotlib")
+    # Plot comparison if matplotlib available
+    if len(results) > 1:
+        try:
+            import matplotlib.pyplot as plt
+            
+            fig, ax = plt.subplots(figsize=(12, 6))
+            
+            for name, result in results:
+                if not result.equity_curve.empty:
+                    result.equity_curve['value'].plot(ax=ax, label=name, linewidth=2)
+            
+            ax.set_title('Strategy Comparison - Equity Curves')
+            ax.set_xlabel('Date')
+            ax.set_ylabel('Portfolio Value ($)')
+            ax.legend()
+            ax.grid(True, alpha=0.3)
+            
+            plt.tight_layout()
+            plt.savefig('strategy_comparison.png', dpi=150)
+            logger.info("Comparison chart saved to strategy_comparison.png")
+            
+        except ImportError:
+            pass
 
 
 if __name__ == "__main__":
