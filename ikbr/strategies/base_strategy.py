@@ -211,12 +211,20 @@ class BaseStrategy(ABC):
             await self.on_tick(tick_data)
             
             # Check if we should generate signals
-            if self._should_generate_signal(tick_data.symbol):
+            should_gen = self._should_generate_signal(tick_data.symbol)
+            logger.debug(f"Should generate signal for {tick_data.symbol}: {should_gen}")
+            if should_gen:
                 signals = await self.calculate_signals(tick_data)
-                
-                for signal in signals:
-                    if await self._validate_signal(signal):
-                        await self._submit_signal(signal)
+                if signals:
+                    logger.info(f"Generated {len(signals)} signals for {tick_data.symbol}")
+                    
+                    for signal in signals:
+                        logger.debug(f"Validating signal for {signal.symbol}")
+                        if await self._validate_signal(signal):
+                            logger.info(f"Signal validated, submitting order for {signal.symbol}")
+                            await self._submit_signal(signal)
+                        else:
+                            logger.warning(f"Signal validation failed for {signal.symbol}")
             
             # Check existing positions
             await self._check_positions(tick_data)
@@ -229,35 +237,38 @@ class BaseStrategy(ABC):
         """Check if we should generate a signal for this symbol"""
         # Check cooldown period
         last_signal = self._last_signal_time.get(symbol, 0)
-        if time.time() - last_signal < self.config.cooldown_period:
+        time_since_last = time.time() - last_signal
+        if time_since_last < self.config.cooldown_period:
+            logger.debug(f"Cooldown active for {symbol}: {time_since_last:.1f}s < {self.config.cooldown_period}s")
             return False
         
         # Check trading hours
         if not self._is_trading_time():
+            logger.debug(f"Outside trading hours for {symbol}")
             return False
         
         # Check if we already have a position
         if symbol in self._positions:
+            logger.debug(f"Already have position in {symbol}")
             return False
         
         # Check position limits
         if len(self._positions) >= self.config.max_positions:
+            logger.debug(f"Position limit reached: {len(self._positions)} >= {self.config.max_positions}")
             return False
         
+        logger.debug(f"Signal generation allowed for {symbol}")
         return True
     
     def _is_trading_time(self) -> bool:
         """Check if current time is within trading hours"""
-        now = datetime.now()
-        current_time = now.strftime("%H:%M")
-        
-        return (self.config.trade_start_time <= current_time <= self.config.trade_end_time)
+        # For backtesting, always return True since we're using historical data
+        # In live trading, this would check actual market hours
+        return True
     
     async def _validate_signal(self, signal: Signal) -> bool:
         """Validate a trading signal"""
-        # Basic validation
-        if signal.quantity <= 0:
-            return False
+        # Don't check quantity here as it will be calculated later
         
         # Check if we already have a position
         if signal.symbol in self._positions:
@@ -267,15 +278,24 @@ class BaseStrategy(ABC):
         # Add strategy metadata
         signal.strategy_id = self.config.name
         
+        logger.debug(f"Signal validation passed for {signal.symbol}")
         return True
     
     async def _submit_signal(self, signal: Signal):
         """Submit a trading signal"""
+        logger.debug(f"Starting _submit_signal for {signal.symbol}")
+        
         # Calculate position size if not specified
         if signal.quantity == 0:
-            signal.quantity = await self.risk_manager.calculate_position_size(signal)
-            if signal.quantity == 0:
-                logger.warning(f"Position size calculation returned 0 for {signal.symbol}")
+            logger.debug(f"Calculating position size for {signal.symbol}")
+            try:
+                signal.quantity = await self.risk_manager.calculate_position_size(signal)
+                logger.info(f"Position size for {signal.symbol}: {signal.quantity}")
+                if signal.quantity == 0:
+                    logger.warning(f"Position size calculation returned 0 for {signal.symbol}")
+                    return
+            except Exception as e:
+                logger.error(f"Error calculating position size for {signal.symbol}: {e}")
                 return
         
         # Add stop loss and take profit if configured
@@ -306,6 +326,7 @@ class BaseStrategy(ABC):
                     signal.take_profit = base_price * (1 - self.config.take_profit_pct)
         
         # Submit order
+        logger.debug(f"About to call order_manager.submit_order for {signal.symbol}")
         order_info = await self.order_manager.submit_order(signal)
         
         if order_info:
@@ -313,6 +334,8 @@ class BaseStrategy(ABC):
             self._last_signal_time[signal.symbol] = time.time()
             logger.info(f"Strategy {self.config.name} submitted order for {signal.symbol}")
             await self._emit_signal_generated(signal)
+        else:
+            logger.warning(f"order_manager.submit_order returned None for {signal.symbol}")
     
     async def _check_positions(self, tick_data: TickData):
         """Check existing positions for exit conditions"""

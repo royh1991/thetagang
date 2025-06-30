@@ -340,32 +340,40 @@ class RiskManager:
         
         # Get account value
         account_value = portfolio_risk.total_value
+        logger.debug(f"Portfolio value for position sizing: ${account_value}")
         
         # Calculate risk amount
         risk_amount = account_value * self.limits.risk_per_trade_pct
+        logger.debug(f"Risk amount: ${risk_amount} ({self.limits.risk_per_trade_pct*100}% of ${account_value})")
         
         # Get current price
         if signal.limit_price:
             entry_price = signal.limit_price
         else:
             entry_price = await self._get_current_price(signal.symbol)
+            logger.debug(f"Current price for {signal.symbol}: {entry_price}")
             if not entry_price:
+                logger.warning(f"Could not get current price for {signal.symbol}")
                 return 0
         
         # Calculate position size based on stop loss
         if signal.stop_loss:
             price_risk = abs(entry_price - signal.stop_loss)
+            logger.debug(f"Stop loss: {signal.stop_loss}, Price risk: {price_risk}")
             if price_risk > 0:
                 shares = int(risk_amount / price_risk)
+                logger.debug(f"Shares based on stop loss: {shares}")
             else:
                 shares = 0
         else:
             # Use fixed percentage if no stop loss
             shares = int(risk_amount / (entry_price * 0.02))  # 2% price risk
+            logger.debug(f"No stop loss, using 2% risk. Shares: {shares}")
         
         # Apply limits
         max_shares = int(self.limits.max_order_size / entry_price)
         shares = min(shares, max_shares)
+        logger.debug(f"After max order size limit ({self.limits.max_order_size}): {shares} shares")
         
         # Check existing position
         if signal.symbol in self._positions:
@@ -374,8 +382,11 @@ class RiskManager:
                 # Adding to position - check position limit
                 max_additional = int(self.limits.max_position_size / entry_price) - abs(existing.quantity)
                 shares = min(shares, max_additional)
+                logger.debug(f"After position limit check: {shares} shares")
         
-        return max(0, shares)
+        final_shares = max(0, shares)
+        logger.info(f"Final position size for {signal.symbol}: {final_shares} shares")
+        return final_shares
     
     async def get_portfolio_risk(self) -> PortfolioRisk:
         """Get current portfolio risk metrics"""
@@ -481,8 +492,25 @@ class RiskManager:
     
     async def _get_current_price(self, symbol: str) -> Optional[float]:
         """Get current price for a symbol"""
-        # This would normally get from market data manager
-        # For now, return None to indicate unavailable
+        # Try to get from IB ticker
+        for ticker in self.ib.pendingTickers():
+            if hasattr(ticker, 'contract') and ticker.contract.symbol == symbol:
+                if ticker.last and not np.isnan(ticker.last):
+                    logger.debug(f"Got price for {symbol} from ticker.last: {ticker.last}")
+                    return ticker.last
+                elif ticker.bid and ticker.ask and not np.isnan(ticker.bid) and not np.isnan(ticker.ask):
+                    price = (ticker.bid + ticker.ask) / 2
+                    logger.debug(f"Got price for {symbol} from bid/ask: {price}")
+                    return price
+        
+        # If not found in tickers, check account positions
+        for position in self.ib.positions():
+            if position.contract.symbol == symbol:
+                if position.marketPrice and position.marketPrice > 0:
+                    logger.debug(f"Got price for {symbol} from position: {position.marketPrice}")
+                    return position.marketPrice
+        
+        logger.warning(f"Could not find price for {symbol}")
         return None
     
     async def _monitor_risk(self):

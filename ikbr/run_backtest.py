@@ -213,9 +213,12 @@ async def main():
             position_size_pct=args.position_size,
             stop_loss_pct=0.02,
             take_profit_pct=0.05,
+            cooldown_period=0.0,  # Disable cooldown for backtesting
             metadata={
-                'lookback_period': 20,
-                'momentum_threshold': 0.015
+                'lookback_period': 5,  # Very short lookback
+                'momentum_threshold': 0.001,  # Very low threshold (0.1%)
+                'ma_period': 5,  # Very short MA period
+                'volume_multiplier': 0.5  # Very lenient volume requirement
             }
         )
         

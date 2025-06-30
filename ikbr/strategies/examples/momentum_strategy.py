@@ -75,7 +75,12 @@ class MomentumStrategy(BaseStrategy):
         
         symbol = tick.symbol
         
+        
         # Update price history
+        if symbol not in self.price_history:
+            logger.warning(f"Symbol {symbol} not in price_history! Available symbols: {list(self.price_history.keys())}")
+            return
+            
         self.price_history[symbol].append(tick.last)
         
         # Update volume history
@@ -92,13 +97,15 @@ class MomentumStrategy(BaseStrategy):
         symbol = tick.symbol
         
         # Need enough data
+        # Need enough data
         if len(self.price_history[symbol]) < self.ma_period:
             return signals
         
         # Get current values
         current_price = tick.last
-        current_ma = self.ma_values[symbol]
-        current_momentum = self.momentum_values[symbol]
+        current_ma = self.ma_values.get(symbol, 0)
+        current_momentum = self.momentum_values.get(symbol, 0)
+        
         
         # Check volume condition
         if self.volume_history[symbol]:
@@ -108,19 +115,28 @@ class MomentumStrategy(BaseStrategy):
         else:
             volume_condition = True  # No volume data, ignore condition
         
+            
         # Buy signal conditions
         if (current_price > current_ma and 
             current_momentum > self.momentum_threshold and
             volume_condition):
             
+            logger.info(f"BUY SIGNAL for {symbol}: Price={current_price:.2f} > MA={current_ma:.2f}, Momentum={current_momentum:.4f} > {self.momentum_threshold}")
+            
             # Calculate position size based on momentum strength
             position_score = min(current_momentum / self.momentum_threshold, 2.0)
+            
+            # Calculate stop loss and take profit
+            stop_loss = current_price * (1 - self.config.stop_loss_pct)
+            take_profit = current_price * (1 + self.config.take_profit_pct)
             
             signal = Signal(
                 action="BUY",
                 symbol=symbol,
                 quantity=0,  # Will be calculated by risk manager
                 order_type="MARKET",
+                stop_loss=stop_loss,
+                take_profit=take_profit,
                 metadata={
                     'momentum': current_momentum,
                     'ma_ratio': current_price / current_ma,

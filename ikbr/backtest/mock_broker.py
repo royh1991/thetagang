@@ -101,6 +101,12 @@ class MockBroker:
         # Create mock IB instance
         self._mock_ib = MockIB()
         
+        # Set reference so MockIB can execute orders through this broker
+        self._mock_ib._mock_broker = self
+        
+        # Initialize MockIB account values
+        self._update_mock_ib_account_values()
+        
     def get_next_order_id(self) -> str:
         """Generate unique order ID"""
         self._order_counter += 1
@@ -128,6 +134,9 @@ class MockBroker:
                 'volume': tick.volume
             }
         self._mock_ib.update_prices(price_dict)
+        
+        # Update MockIB account values to reflect current state
+        self._update_mock_ib_account_values()
     
     async def submit_order(self, signal: Signal) -> Optional[OrderInfo]:
         """Submit an order for execution"""
@@ -253,6 +262,9 @@ class MockBroker:
         
         # Emit order filled event
         await self._emit_order_filled(order_info)
+        
+        # Update MockIB account values after execution
+        self._update_mock_ib_account_values()
         
         logger.info(f"Executed {signal.action} {signal.quantity} {signal.symbol} @ ${fill_price:.2f}")
     
@@ -417,3 +429,66 @@ class MockBroker:
     def get_mock_ib(self):
         """Return mock IB connection for compatibility"""
         return self._mock_ib
+    
+    def _update_mock_ib_account_values(self):
+        """Update MockIB account values to reflect current broker state"""
+        # Calculate portfolio value
+        portfolio_value = self.get_portfolio_value()
+        
+        # Calculate positions value with safety check for current_price
+        positions_value = 0.0
+        for position in self.positions.values():
+            if position.current_price > 0:
+                positions_value += position.quantity * position.current_price
+            else:
+                # Use average price if current price not set
+                positions_value += position.quantity * position.avg_price
+        
+        # Update MockIB's account values
+        self._mock_ib._account_values.update({
+            'NetLiquidation': portfolio_value,
+            'TotalCashValue': self.cash,
+            'TotalCashBalance': self.cash,
+            'BuyingPower': self.cash * 4,  # Assuming 4x margin
+            'UnrealizedPnL': sum(p.unrealized_pnl for p in self.positions.values()),
+            'RealizedPnL': sum(p.realized_pnl for p in self.positions.values()),
+            'GrossPositionValue': positions_value
+        })
+        
+        logger.debug(f"Updated MockIB account values - NetLiq: ${portfolio_value:.2f}, Cash: ${self.cash:.2f}")
+    
+    def _execute_order_fill(self, symbol: str, action: str, quantity: int, price: float, commission: float):
+        """Execute an order fill from MockIB"""
+        logger.info(f"Executing fill: {action} {quantity} {symbol} @ ${price:.2f}")
+        
+        # Update position
+        if symbol not in self.positions:
+            self.positions[symbol] = Position(symbol=symbol)
+        
+        position = self.positions[symbol]
+        
+        # Calculate cost
+        total_cost = quantity * price + commission
+        
+        if action == "BUY":
+            # Check if we have enough cash
+            if total_cost > self.cash:
+                logger.warning(f"Insufficient cash for {action} {quantity} {symbol}: ${total_cost:.2f} > ${self.cash:.2f}")
+                return
+            
+            # Update cash and position
+            self.cash -= total_cost
+            position.add_shares(quantity, price, commission)
+        else:  # SELL
+            # Update cash and position
+            self.cash += (quantity * price - commission)
+            position.remove_shares(quantity, price, commission)
+        
+        # Update metrics
+        self.total_commission += commission
+        self.num_trades += 1
+        
+        # Update MockIB account values
+        self._update_mock_ib_account_values()
+        
+        logger.info(f"Fill executed. New position: {position.quantity} {symbol}, Cash: ${self.cash:.2f}")

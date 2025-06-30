@@ -13,6 +13,12 @@ This document serves as a comprehensive guide for LLMs assisting with IBKR tradi
 7. [Testing Strategy](#testing-strategy)
 8. [Performance Optimization](#performance-optimization)
 
+## Environment Setup
+To activate the virtual environment for this project, use:
+```bash
+source venv/bin/activate
+```
+
 ## System Architecture Overview
 
 ### Technology Stack
@@ -519,3 +525,70 @@ class MomentumStrategy(BaseStrategy):
    - Failover and recovery
 
 Remember: Every component must be thoroughly tested before integration. Start with paper trading and validate each module independently.
+
+## Backtesting System Implementation
+
+### Key Learnings from Backtester Development
+
+1. **Event Bus Architecture**
+   - Use a global event bus instance (`get_event_bus()`) for all components
+   - Don't create separate event bus instances - this breaks event flow
+   - Subscribe to events before starting components
+
+2. **Mock IB Implementation**
+   - MockIB must implement `qualifyContracts()` to assign conIds for contract hashing
+   - Must implement `pendingTickers()` method for risk manager compatibility
+   - Handle MIDPRICE orders (adaptive orders) as market orders in backtesting
+
+3. **Order Flow in Backtesting**
+   ```python
+   # Correct flow:
+   # 1. Strategy generates signal
+   # 2. Risk manager calculates position size (requires pendingTickers())
+   # 3. Order manager submits order
+   # 4. MockIB processes order synchronously
+   # 5. Mock broker fills order based on current tick price
+   ```
+
+4. **Common Backtesting Issues and Fixes**
+
+   **Issue**: No trades executed despite signals being generated
+   - **Cause**: Position sizing returning 0 due to missing ticker data
+   - **Fix**: Implement `pendingTickers()` in MockIB to return active tickers
+
+   **Issue**: Orders not being filled
+   - **Cause**: MockIB only checking for 'MKT' order type, but adaptive orders use 'MIDPRICE'
+   - **Fix**: Check for multiple order types: `['MKT', 'MARKET', 'MIDPRICE']`
+
+   **Issue**: Async sleep delays in backtesting
+   - **Cause**: Order confirmation waiting for broker acknowledgment
+   - **Fix**: Return immediately in `_wait_for_submit_confirmation()` for backtesting
+
+   **Issue**: KeyError 'pnl' in metrics calculation
+   - **Cause**: Trying to calculate P&L when only buy trades executed (no sells)
+   - **Fix**: Check if 'pnl' column exists before using it
+
+5. **Data Flow in Backtesting**
+   ```python
+   # IB historical data → Ticks → Mock broker price update → Event emission
+   # Each tick triggers:
+   # 1. mock_broker.update_prices() - Update internal prices
+   # 2. mock_ib.update_prices() - Update tickers and emit pendingTickersEvent
+   # 3. event_bus.emit(TICK) - Notify strategies
+   # 4. mock_broker.process_orders() - Fill pending orders
+   ```
+
+6. **Testing the Backtester**
+   ```bash
+   # Always use the correct virtual environment
+   source venv/bin/activate
+   
+   # Run backtest with proper parameters
+   python run_backtest.py --strategy momentum --days 1 --symbols SPY --capital 250000
+   ```
+
+7. **Architecture Best Practices**
+   - Keep MockIB interface identical to real IB for easy switching
+   - Process orders synchronously in backtesting (no async delays)
+   - Use the same event types and data structures as live trading
+   - Cache historical data to avoid repeated IB API calls

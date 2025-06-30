@@ -114,17 +114,24 @@ class BacktestResult:
         # Trade statistics
         if not self.trades.empty:
             self.total_trades = len(self.trades)
-            self.winning_trades = len(self.trades[self.trades['pnl'] > 0])
-            self.losing_trades = len(self.trades[self.trades['pnl'] <= 0])
+            # Only count trades that have pnl calculated
+            if 'pnl' in self.trades.columns:
+                self.winning_trades = len(self.trades[self.trades['pnl'] > 0])
+                self.losing_trades = len(self.trades[self.trades['pnl'] <= 0])
+            else:
+                # If no PnL column, these are all open positions
+                self.winning_trades = 0
+                self.losing_trades = 0
             
             if self.total_trades > 0:
                 self.win_rate = self.winning_trades / self.total_trades
             
-            if self.winning_trades > 0:
-                self.avg_win = self.trades[self.trades['pnl'] > 0]['pnl'].mean()
-            
-            if self.losing_trades > 0:
-                self.avg_loss = abs(self.trades[self.trades['pnl'] <= 0]['pnl'].mean())
+            if 'pnl' in self.trades.columns:
+                if self.winning_trades > 0:
+                    self.avg_win = self.trades[self.trades['pnl'] > 0]['pnl'].mean()
+                
+                if self.losing_trades > 0:
+                    self.avg_loss = abs(self.trades[self.trades['pnl'] <= 0]['pnl'].mean())
             
             if self.avg_loss > 0:
                 self.profit_factor = (self.avg_win * self.winning_trades) / \
@@ -348,10 +355,13 @@ class BacktestEngine:
                     EventTypes.TICK,
                     tick,
                     source="BacktestEngine"
-                ))
+                ), wait=True)  # Wait for handlers to process
                 
                 # Process pending orders
                 await self.mock_broker.process_orders()
+                
+                # Process any pending order fills in MockIB
+                await self.mock_broker._mock_ib.process_pending_orders()
                 
                 # Record equity curve at regular intervals
                 # Convert timestamp to datetime if it's a float

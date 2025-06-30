@@ -102,6 +102,7 @@ class MockIB:
         self._positions = {}
         self._orders = {}
         self._next_order_id = 1
+        self._pending_order_fills = []
         
         logger.info("MockIB initialized for backtesting")
     
@@ -201,6 +202,10 @@ class MockIB:
         """Get current positions"""
         return list(self._positions.values())
     
+    def pendingTickers(self) -> List[MockTicker]:
+        """Get all pending tickers"""
+        return list(self._tickers.values())
+    
     def accountValues(self, account: str = '') -> List:
         """Get account values"""
         from types import SimpleNamespace
@@ -240,9 +245,135 @@ class MockIB:
         logger.info(f"Placed order {order.orderId}: {order.action} {order.totalQuantity} {contract.symbol}")
         
         # Return trade object
-        from ib_async import Trade
+        from ib_async import Trade, OrderStatus as IBOrderStatus
         trade = Trade(contract=contract, order=order)
+        
+        # Create order status
+        order_status = IBOrderStatus(
+            orderId=order.orderId,
+            status='PreSubmitted',
+            filled=0,
+            remaining=order.totalQuantity,
+            avgFillPrice=0.0,
+            permId=0,
+            parentId=0,
+            lastFillPrice=0.0,
+            clientId=0,
+            whyHeld='',
+            mktCapPrice=0.0
+        )
+        trade.orderStatus = order_status
+        
+        # Store trade for processing
+        self._orders[order.orderId]['trade'] = trade
+        
+        # In backtesting, execute orders immediately
+        # We'll call this synchronously from process_pending_orders
+        self._pending_order_fills.append(trade)
+        
         return trade
+    
+    async def _simulate_order_submission(self, trade):
+        """Simulate order submission and execution"""
+        logger.debug(f"Simulating order submission for {trade.contract.symbol}")
+        
+        # Update status to Submitted
+        trade.orderStatus.status = 'Submitted'
+        self.orderStatusEvent.emit(trade)
+        
+        # Check if we should fill the order
+        contract = trade.contract
+        order = trade.order
+        
+        # Get current price
+        current_price = None
+        logger.debug(f"Looking for price data for {contract.symbol}. Available symbols: {list(self._current_prices.keys())}")
+        if contract.symbol in self._current_prices:
+            current_price = self._current_prices[contract.symbol].get('last')
+            logger.info(f"Current price for {contract.symbol}: {current_price}")
+        
+        if not current_price:
+            # No price available, reject order
+            logger.warning(f"No market data available for {contract.symbol}")
+            self.errorEvent.emit(order.orderId, 201, "No market data available", contract)
+            trade.orderStatus.status = 'Cancelled'
+            self.orderStatusEvent.emit(trade)
+            return
+        
+        # For market orders, fill immediately
+        order_type = getattr(order, 'orderType', 'MKT')
+        logger.info(f"Order details - type: {order_type}, action: {order.action}, qty: {order.totalQuantity}")
+        # MIDPRICE is an adaptive market order
+        if order_type in ['MKT', 'MARKET', 'MIDPRICE']:
+            logger.info(f"Filling market order for {contract.symbol} at {current_price}")
+            await self._fill_order(trade, current_price)
+        # For limit orders, check if price allows fill
+        elif order_type == 'LMT':
+            if (order.action == 'BUY' and order.lmtPrice >= current_price) or \
+               (order.action == 'SELL' and order.lmtPrice <= current_price):
+                logger.info(f"Filling limit order for {contract.symbol} at {order.lmtPrice}")
+                await self._fill_order(trade, order.lmtPrice)
+    
+    async def _fill_order(self, trade, fill_price):
+        """Fill an order"""
+        from ib_async import Fill, Execution, CommissionReport
+        import time
+        
+        order = trade.order
+        contract = trade.contract
+        
+        logger.info(f"Filling order {order.orderId}: {order.action} {order.totalQuantity} {contract.symbol} @ {fill_price}")
+        
+        # Update order status
+        trade.orderStatus.status = 'Filled'
+        trade.orderStatus.filled = order.totalQuantity
+        trade.orderStatus.remaining = 0
+        trade.orderStatus.avgFillPrice = fill_price
+        trade.orderStatus.lastFillPrice = fill_price
+        
+        # Emit order status event
+        self.orderStatusEvent.emit(trade)
+        
+        # Create execution
+        execution = Execution(
+            execId=f"exec_{order.orderId}_{time.time()}",
+            time=datetime.now().strftime("%Y%m%d %H:%M:%S"),
+            acctNumber='DU123456',
+            exchange='SMART',
+            side=order.action,
+            shares=order.totalQuantity,
+            price=fill_price,
+            permId=order.permId if hasattr(order, 'permId') else 0,
+            orderId=order.orderId,
+            cumQty=order.totalQuantity,
+            avgPrice=fill_price,
+            lastLiquidity=1
+        )
+        
+        # Create commission report
+        commission = CommissionReport(
+            execId=execution.execId,
+            commission=0.01 * order.totalQuantity,  # $0.01 per share
+            currency='USD',
+            realizedPNL=0.0,
+            yield_=0.0,
+            yieldRedemptionDate=0
+        )
+        
+        # Create fill
+        fill = Fill(
+            contract=contract,
+            execution=execution,
+            commissionReport=commission,
+            time=datetime.now()
+        )
+        
+        # Emit execution details event
+        self.execDetailsEvent.emit(trade, fill)
+        
+        # Update order status in our records
+        if order.orderId in self._orders:
+            self._orders[order.orderId]['status'] = 'Filled'
     
     def cancelOrder(self, order: Any):
         """Cancel an order"""
@@ -302,6 +433,15 @@ class MockIB:
     def run(self):
         """Run the IB event loop - no-op in mock mode"""
         pass
+    
+    async def process_pending_orders(self):
+        """Process any pending order fills"""
+        if self._pending_order_fills:
+            logger.info(f"Processing {len(self._pending_order_fills)} pending order fills")
+        while self._pending_order_fills:
+            trade = self._pending_order_fills.pop(0)
+            logger.debug(f"About to simulate order for {trade.contract.symbol}")
+            await self._simulate_order_submission(trade)
     
     def __getattr__(self, name):
         """Catch-all for any missing IB methods"""
