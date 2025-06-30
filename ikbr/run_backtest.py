@@ -1,19 +1,31 @@
 """
-Run Backtest with CLI Options
+Run Trading Bot - Backtest or Live Mode
 
-Comprehensive backtesting with real IBKR data and detailed reporting.
+Supports both backtesting with historical data and live trading (paper or production).
+
+Usage:
+    # Backtesting
+    python run_backtest.py --mode backtest --strategy momentum --days 30
+    
+    # Live paper trading (default)
+    python run_backtest.py --mode live --strategy momentum
+    
+    # Live production trading (requires confirmation)
+    python run_backtest.py --mode live --trading-mode prod --strategy momentum
 """
 
 import asyncio
 import sys
 import argparse
 from datetime import datetime, timedelta
+from typing import List
 from loguru import logger
 
 sys.path.insert(0, '.')
 
 from backtest.engine import BacktestEngine, BacktestConfig
 from backtest.report_generator import ReportGenerator
+from live.engine import LiveEngine, LiveConfig
 from strategies.examples.momentum_strategy import MomentumStrategy, MomentumConfig
 from strategies.examples.mean_reversion_strategy import MeanReversionStrategy, MeanReversionConfig
 
@@ -115,14 +127,79 @@ async def run_mean_reversion_backtest():
     return result
 
 
+async def run_live_trading(strategy_name: str, symbols: List[str], 
+                          trading_mode: str = "paper", **kwargs):
+    """Run live trading with specified strategy"""
+    
+    # Create live config
+    config = LiveConfig(
+        trading_mode=trading_mode,
+        log_trades=True,
+        enable_notifications=True,
+        safety_check_prod=True
+    )
+    
+    # Create engine
+    engine = LiveEngine(config)
+    
+    # Connect to IB
+    await engine.connect()
+    await engine.initialize()
+    
+    # Configure strategy
+    if strategy_name == "momentum":
+        strategy_config = MomentumConfig(
+            symbols=symbols,
+            max_positions=len(symbols),
+            position_size_pct=kwargs.get('position_size', 0.1),  # Smaller for live
+            stop_loss_pct=0.02,
+            take_profit_pct=0.05,
+            cooldown_period=60.0,  # 1 minute cooldown for live
+            metadata={
+                'lookback_period': 20,
+                'momentum_threshold': kwargs.get('momentum_threshold', 0.015)
+            }
+        )
+        engine.add_strategy(MomentumStrategy, strategy_config)
+        
+    elif strategy_name == "mean_reversion":
+        strategy_config = MeanReversionConfig(
+            symbols=symbols,
+            max_positions=len(symbols),
+            position_size_pct=kwargs.get('position_size', 0.1),
+            stop_loss_pct=0.03,
+            take_profit_pct=0.02,
+            cooldown_period=60.0,
+            metadata={
+                'ma_period': 20,
+                'rsi_oversold': 30,
+                'rsi_overbought': 70
+            }
+        )
+        engine.add_strategy(MeanReversionStrategy, strategy_config)
+    
+    # Run live trading
+    await engine.run()
+
+
 async def main():
-    """Run backtests with CLI options"""
-    parser = argparse.ArgumentParser(description="Run IBKR Strategy Backtests")
+    """Run trading bot with CLI options"""
+    parser = argparse.ArgumentParser(description="Run IBKR Trading Bot - Backtest or Live")
+    
+    # Mode selection
+    parser.add_argument('--mode', type=str, default='backtest',
+                       choices=['backtest', 'live'],
+                       help='Run mode: backtest historical data or live trading')
+    
+    # Trading mode (for live mode)
+    parser.add_argument('--trading-mode', type=str, default='paper',
+                       choices=['paper', 'prod'],
+                       help='Trading mode: paper (simulated) or prod (real money)')
     
     # Strategy selection
-    parser.add_argument('--strategy', type=str, default='all',
+    parser.add_argument('--strategy', type=str, default='momentum',
                        choices=['momentum', 'mean_reversion', 'all'],
-                       help='Strategy to backtest')
+                       help='Strategy to run')
     
     # Date range
     parser.add_argument('--days', type=int, default=30,
@@ -168,8 +245,33 @@ async def main():
     logger.remove()
     log_level = "DEBUG" if args.verbose else "INFO"
     logger.add(sys.stdout, level=log_level)
-    logger.add("logs/backtest.log", level="DEBUG")
     
+    if args.mode == "live":
+        logger.add("logs/live_trading.log", level="DEBUG")
+    else:
+        logger.add("logs/backtest.log", level="DEBUG")
+    
+    # Handle live trading mode
+    if args.mode == "live":
+        # Validate live mode arguments
+        if args.strategy == "all":
+            logger.error("Cannot run 'all' strategies in live mode. Please select one strategy.")
+            return
+            
+        if args.trading_mode == "prod":
+            logger.warning("⚠️  PRODUCTION MODE SELECTED - REAL MONEY TRADING ⚠️")
+        
+        # Run live trading
+        await run_live_trading(
+            strategy_name=args.strategy,
+            symbols=args.symbols,
+            trading_mode=args.trading_mode,
+            position_size=args.position_size,
+            momentum_threshold=0.001 if args.strategy == "momentum" else None
+        )
+        return
+    
+    # Handle backtest mode
     # Determine date range
     if args.start_date and args.end_date:
         start_date = datetime.strptime(args.start_date, '%Y-%m-%d')
@@ -325,4 +427,9 @@ async def main():
 
 
 if __name__ == "__main__":
+    # Check if we're running in live mode (need to start IB event loop)
+    if "--mode" in sys.argv and "live" in sys.argv:
+        from ib_async import util
+        util.startLoop()
+    
     asyncio.run(main())

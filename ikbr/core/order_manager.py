@@ -239,7 +239,7 @@ class OrderManager:
         order_info = self._orders[order_id]
         
         if not order_info.is_active:
-            logger.warning(f"Order not active: {order_id} (status: {order_info.status})")
+            logger.debug(f"Order not active: {order_id} (status: {order_info.status})")
             return False
         
         try:

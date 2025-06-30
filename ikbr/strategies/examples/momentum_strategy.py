@@ -149,6 +149,39 @@ class MomentumStrategy(BaseStrategy):
                        f"momentum={current_momentum:.3f}, "
                        f"price/MA={current_price/current_ma:.3f}")
         
+        # Sell/Short signal conditions
+        elif (current_price < current_ma and 
+              current_momentum < -self.momentum_threshold and
+              volume_condition):
+            
+            logger.info(f"SELL SIGNAL for {symbol}: Price={current_price:.2f} < MA={current_ma:.2f}, Momentum={current_momentum:.4f} < {-self.momentum_threshold}")
+            
+            # Calculate position size based on momentum strength
+            position_score = min(abs(current_momentum) / self.momentum_threshold, 2.0)
+            
+            # Calculate stop loss and take profit for short position
+            stop_loss = current_price * (1 + self.config.stop_loss_pct)  # Higher for shorts
+            take_profit = current_price * (1 - self.config.take_profit_pct)  # Lower for shorts
+            
+            signal = Signal(
+                action="SELL",
+                symbol=symbol,
+                quantity=0,  # Will be calculated by risk manager
+                order_type="MARKET",
+                stop_loss=stop_loss,
+                take_profit=take_profit,
+                metadata={
+                    'momentum': current_momentum,
+                    'ma_ratio': current_price / current_ma,
+                    'position_score': position_score
+                }
+            )
+            signals.append(signal)
+            
+            logger.info(f"Momentum SELL signal for {symbol}: "
+                       f"momentum={current_momentum:.3f}, "
+                       f"price/MA={current_price/current_ma:.3f}")
+        
         return signals
     
     async def should_close_position(self, tick: TickData, 

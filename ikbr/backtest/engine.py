@@ -18,7 +18,7 @@ from loguru import logger
 from core.event_bus import EventBus, Event, EventTypes, get_event_bus
 from core.market_data import MarketDataManager, TickData
 from core.order_manager import OrderManager, Signal
-from core.risk_manager import RiskManager, PortfolioRisk
+from core.risk_manager import RiskManager, PortfolioRisk, RiskLimits
 from strategies.base_strategy import BaseStrategy, StrategyConfig
 from .ib_data_provider import IBDataProvider
 from .mock_broker import MockBroker
@@ -299,7 +299,14 @@ class BacktestEngine:
         mock_ib = self.mock_broker.get_mock_ib()
         self.market_data = MarketDataManager(mock_ib)
         self.order_manager = OrderManager(mock_ib)
-        self.risk_manager = RiskManager(mock_ib)
+        
+        # Create custom risk limits for backtesting
+        backtest_risk_limits = RiskLimits(
+            # Keep most defaults but reduce order interval for backtesting
+            min_order_interval=0.001,  # 1ms instead of 1s for backtesting
+            max_daily_trades=10000,    # Allow many trades in backtest
+        )
+        self.risk_manager = RiskManager(mock_ib, backtest_risk_limits)
         
         # Link components
         self.order_manager.set_risk_manager(self.risk_manager)

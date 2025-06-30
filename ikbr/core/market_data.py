@@ -177,8 +177,12 @@ class MarketDataManager:
         try:
             contract = Stock(symbol, exchange, currency)
             
-            # Qualify contract
-            self.ib.qualifyContracts(contract)
+            # Qualify contract - use async version if in async context
+            if self.ib.client.isConnected():
+                await self.ib.qualifyContractsAsync(contract)
+            else:
+                logger.error(f"IB not connected when trying to subscribe to {symbol}")
+                return False
             
             if contract in self._subscriptions:
                 logger.debug(f"Already subscribed to {symbol}")
