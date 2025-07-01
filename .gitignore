@@ -152,3 +152,9 @@ cython_debug/
 
 # Ignore notebooks
 *.ipynb
+
+# Ignore backtest reports
+ikbr/backtest/reports/
+
+# Ignore backtest cache files
+ikbr/backtest/cache/

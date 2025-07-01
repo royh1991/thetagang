@@ -178,11 +178,31 @@ class MarketDataManager:
             contract = Stock(symbol, exchange, currency)
             
             # Qualify contract - use async version if in async context
-            if self.ib.client.isConnected():
-                await self.ib.qualifyContractsAsync(contract)
+            # Check if this is MockIB (backtesting) or real IB
+            from backtest.mock_ib import MockIB
+            
+            if isinstance(self.ib, MockIB):
+                # MockIB for backtesting
+                if self.ib.isConnected():
+                    self.ib.qualifyContracts(contract)
+                else:
+                    logger.error(f"MockIB not connected when trying to subscribe to {symbol}")
+                    return False
             else:
-                logger.error(f"IB not connected when trying to subscribe to {symbol}")
-                return False
+                # Real IB connection
+                if hasattr(self.ib, 'client') and hasattr(self.ib.client, 'isConnected'):
+                    if self.ib.client.isConnected():
+                        await self.ib.qualifyContractsAsync(contract)
+                    else:
+                        logger.error(f"IB not connected when trying to subscribe to {symbol}")
+                        return False
+                else:
+                    # Fallback for other IB-like objects
+                    if hasattr(self.ib, 'isConnected') and self.ib.isConnected():
+                        await self.ib.qualifyContractsAsync(contract)
+                    else:
+                        logger.error(f"IB not connected when trying to subscribe to {symbol}")
+                        return False
             
             if contract in self._subscriptions:
                 logger.debug(f"Already subscribed to {symbol}")

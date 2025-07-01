@@ -75,6 +75,8 @@ class MomentumStrategy(BaseStrategy):
         
         symbol = tick.symbol
         
+        # Log live price
+        logger.info(f"📊 {symbol} Live Price: ${tick.last:.2f} | Bid: ${tick.bid:.2f} | Ask: ${tick.ask:.2f} | Volume: {tick.volume:,}")
         
         # Update price history
         if symbol not in self.price_history:
@@ -90,6 +92,11 @@ class MomentumStrategy(BaseStrategy):
         # Calculate indicators
         if len(self.price_history[symbol]) >= self.lookback_period:
             self._calculate_indicators(symbol)
+            
+            # Log current indicators
+            current_ma = self.ma_values.get(symbol, 0)
+            current_momentum = self.momentum_values.get(symbol, 0)
+            logger.debug(f"{symbol} Indicators: MA=${current_ma:.2f}, Momentum={current_momentum:.4f}, Price/MA={(tick.last/current_ma if current_ma > 0 else 0):.3f}")
     
     async def calculate_signals(self, tick: TickData) -> List[Signal]:
         """Generate trading signals"""
@@ -99,6 +106,7 @@ class MomentumStrategy(BaseStrategy):
         # Need enough data
         # Need enough data
         if len(self.price_history[symbol]) < self.ma_period:
+            logger.debug(f"{symbol}: Not enough data for signals. Have {len(self.price_history[symbol])}, need {self.ma_period}")
             return signals
         
         # Get current values
@@ -106,12 +114,15 @@ class MomentumStrategy(BaseStrategy):
         current_ma = self.ma_values.get(symbol, 0)
         current_momentum = self.momentum_values.get(symbol, 0)
         
+        # Log signal evaluation
+        logger.debug(f"{symbol} Signal Check: Price=${current_price:.2f}, MA=${current_ma:.2f}, Momentum={current_momentum:.4f}, Threshold={self.momentum_threshold}")
         
         # Check volume condition
         if self.volume_history[symbol]:
             avg_volume = np.mean(list(self.volume_history[symbol]))
             current_volume = tick.volume or 0
             volume_condition = current_volume > avg_volume * self.volume_multiplier
+            logger.debug(f"{symbol} Volume: Current={current_volume:,}, Avg={avg_volume:.0f}, Multiplier={self.volume_multiplier}, Pass={volume_condition}")
         else:
             volume_condition = True  # No volume data, ignore condition
         

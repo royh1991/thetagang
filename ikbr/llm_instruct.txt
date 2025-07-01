@@ -592,3 +592,48 @@ Remember: Every component must be thoroughly tested before integration. Start wi
    - Process orders synchronously in backtesting (no async delays)
    - Use the same event types and data structures as live trading
    - Cache historical data to avoid repeated IB API calls
+
+## Live Trading Implementation
+
+### Key Learnings from Live Trading Development
+
+1. **Event Loop Management with ib_async**
+   - **Critical**: Must call `util.startLoop()` before `asyncio.run()` for live trading
+   - Use `qualifyContractsAsync()` instead of `qualifyContracts()` in async contexts
+   - ib_async manages its own event loop, mixing with asyncio requires care
+
+2. **Live vs Backtest Architecture**
+   - Live trading uses real IB connection, backtesting uses MockIB
+   - Risk limits should be different for live vs backtest:
+     - Backtest: `min_order_interval=0.001` (1ms)
+     - Live: `min_order_interval=1.0` (1s) for safety
+   - Position sizes should be smaller in live trading (10% vs 30% in backtest)
+
+3. **Safety Measures for Production**
+   - Default to paper trading mode
+   - Require explicit confirmation for production trading
+   - Use more conservative risk limits in production:
+     - Max position size: $5k (vs $10k in paper)
+     - Max drawdown: 2% (vs 5% in paper)
+   - Log all trades and maintain audit trail
+
+4. **Common Live Trading Issues**
+   - **"This event loop is already running"**: Need `util.startLoop()` before asyncio
+   - **"Failed to subscribe"**: Use async contract qualification in async contexts
+   - **Connection timeouts**: Ensure IB Gateway is running and ports are correct
+
+5. **Dual-Mode Implementation Pattern**
+   ```python
+   # In main script
+   if "--mode" in sys.argv and "live" in sys.argv:
+       from ib_async import util
+       util.startLoop()
+   asyncio.run(main())
+   ```
+
+6. **Live Trading Best Practices**
+   - Subscribe to real-time market data per symbol
+   - Log status updates periodically (every minute)
+   - Implement graceful shutdown on Ctrl+C
+   - Save detailed logs to separate file for live trading
+   - Monitor account value and P&L in real-time
