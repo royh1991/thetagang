@@ -334,10 +334,17 @@ class MockIB:
         # Emit order status event
         self.orderStatusEvent.emit(trade)
         
+        # Get historical timestamp if available
+        exec_time = datetime.now()
+        if contract.symbol in self._current_prices:
+            price_data = self._current_prices[contract.symbol]
+            if isinstance(price_data, dict) and 'timestamp' in price_data:
+                exec_time = datetime.fromtimestamp(price_data['timestamp'])
+        
         # Create execution
         execution = Execution(
             execId=f"exec_{order.orderId}_{time.time()}",
-            time=datetime.now().strftime("%Y%m%d %H:%M:%S"),
+            time=exec_time.strftime("%Y%m%d %H:%M:%S"),
             acctNumber='DU123456',
             exchange='SMART',
             side=order.action,
@@ -414,7 +421,13 @@ class MockIB:
                 ticker.low = price_data.get('low', ticker.last)
                 ticker.close = price_data.get('close', ticker.last)
                 ticker.volume = price_data.get('volume', 0)
-                ticker.time = datetime.now()
+                
+                # Use historical timestamp if provided, otherwise current time
+                if 'timestamp' in price_data:
+                    # Convert float timestamp to datetime
+                    ticker.time = datetime.fromtimestamp(price_data['timestamp'])
+                else:
+                    ticker.time = datetime.now()
         
         # Trigger pending tickers event with all updated tickers
         if self._tickers:

@@ -28,6 +28,7 @@ from backtest.report_generator import ReportGenerator
 from live.engine import LiveEngine, LiveConfig
 from strategies.examples.momentum_strategy import MomentumStrategy, MomentumConfig
 from strategies.examples.mean_reversion_strategy import MeanReversionStrategy, MeanReversionConfig
+from strategies.examples.enhanced_momentum_strategy import EnhancedMomentumStrategy, EnhancedMomentumConfig
 
 
 async def run_momentum_backtest():
@@ -198,7 +199,7 @@ async def main():
     
     # Strategy selection
     parser.add_argument('--strategy', type=str, default='momentum',
-                       choices=['momentum', 'mean_reversion', 'all'],
+                       choices=['momentum', 'mean_reversion', 'enhanced_momentum', 'all'],
                        help='Strategy to run')
     
     # Date range
@@ -315,12 +316,12 @@ async def main():
             position_size_pct=args.position_size,
             stop_loss_pct=0.02,
             take_profit_pct=0.05,
-            cooldown_period=0.0,  # Disable cooldown for backtesting
+            cooldown_period=60.0,  # 1 minute cooldown
             metadata={
-                'lookback_period': 5,  # Very short lookback
-                'momentum_threshold': 0.001,  # Very low threshold (0.1%)
-                'ma_period': 5,  # Very short MA period
-                'volume_multiplier': 0.5  # Very lenient volume requirement
+                'lookback_period': 20,  # Proper lookback period
+                'momentum_threshold': 0.02,  # 2% threshold
+                'ma_period': 50,  # Standard MA period
+                'volume_multiplier': 1.2  # Above average volume
             }
         )
         
@@ -334,6 +335,44 @@ async def main():
             report = report_gen.generate_report(
                 result, 
                 'Momentum_Strategy'
+            )
+            logger.info(f"Report generated successfully")
+    
+    if args.strategy in ['enhanced_momentum', 'all']:
+        logger.info("\nRunning Enhanced Momentum Strategy Backtest...")
+        
+        engine = BacktestEngine(config)
+        
+        strategy_config = EnhancedMomentumConfig(
+            symbols=args.symbols,  # Only trade the requested symbols
+            max_positions=min(3, len(args.symbols)),
+            position_size_pct=args.position_size * 0.8,  # Slightly smaller due to volatility sizing
+            stop_loss_pct=0.03,  # Will be overridden by volatility-based stops
+            take_profit_pct=0.06,  # Will be overridden by volatility-based targets
+            cooldown_period=300.0,  # 5 minute cooldown
+            metadata={
+                'lookback_period': 20,
+                'momentum_threshold': 0.005,  # 0.5% - lowered from 1.5%
+                'volume_multiplier': 1.1,      # Slightly lower volume requirement
+                'ma_period': 20,               # Shorter MA for faster signals
+                'regime_ma_period': 50,        # Shorter regime MA for backtest
+                'volatility_period': 20,
+                'min_adr_pct': 0.01,          # Lower minimum volatility
+                'allow_shorts': False,
+                'use_trading_windows': False   # Disable trading window restrictions
+            }
+        )
+        
+        await engine._initialize()
+        engine.add_strategy(EnhancedMomentumStrategy, strategy_config)
+        
+        result = await engine.run()
+        results.append(('Enhanced Momentum', result))
+        
+        if report_gen:
+            report = report_gen.generate_report(
+                result, 
+                'EnhancedMomentum_Strategy'
             )
             logger.info(f"Report generated successfully")
     

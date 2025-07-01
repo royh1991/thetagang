@@ -22,6 +22,8 @@ services:
       MINIMIZE_MAIN_WINDOW: 'yes'
       JAVA_HEAP_SIZE: 768
       TWS_COLD_RESTART: '11:59 PM'
+      MASTER_API_PORT: 4000  # Override IB Gateway API port to fix internal mismatch
+      API_PORT: 4000  # Tell socat to forward to port 4000 where IB Gateway actually listens
     ports:
       - "127.0.0.1:4101:4003"  # IB Gateway API port (live) - container's socat port for live
       - "127.0.0.1:4102:4004"  # IB Gateway API port (paper) - container's socat port for paper

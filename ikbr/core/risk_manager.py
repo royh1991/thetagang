@@ -32,19 +32,19 @@ class RiskLevel(Enum):
 class RiskLimits:
     """Risk limit configuration"""
     # Position limits
-    max_position_size: float = 10000  # Max $ per position
+    max_position_size: float = 50000  # Max $ per position (increased from 10k)
     max_positions: int = 10  # Max number of open positions
-    max_symbol_exposure: float = 20000  # Max $ exposure per symbol
-    max_sector_exposure: float = 50000  # Max $ exposure per sector
+    max_symbol_exposure: float = 50000  # Max $ exposure per symbol (increased from 20k)
+    max_sector_exposure: float = 100000  # Max $ exposure per sector (increased from 50k)
     
     # Portfolio limits
-    max_total_exposure: float = 100000  # Max total $ exposure
+    max_total_exposure: float = 150000  # Max total $ exposure (increased from 100k)
     max_leverage: float = 1.0  # Max leverage ratio
-    max_daily_loss: float = 5000  # Max daily loss
-    max_drawdown_pct: float = 0.10  # Max drawdown percentage
+    max_daily_loss: float = 10000  # Max daily loss (increased from 5k)
+    max_drawdown_pct: float = 0.15  # Max drawdown percentage (increased from 10%)
     
     # Order limits
-    max_order_size: float = 10000  # Max $ per order
+    max_order_size: float = 50000  # Max $ per order (increased from 10k)
     max_daily_trades: int = 100  # Max trades per day
     min_order_interval: float = 1.0  # Min seconds between orders
     
@@ -342,6 +342,11 @@ class RiskManager:
         account_value = portfolio_risk.total_value
         logger.debug(f"Portfolio value for position sizing: ${account_value}")
         
+        # Ensure minimum account value
+        if account_value < 1000:
+            logger.warning(f"Account value too low for position sizing: ${account_value}")
+            return 0
+        
         # Calculate risk amount
         risk_amount = account_value * self.limits.risk_per_trade_pct
         logger.debug(f"Risk amount: ${risk_amount} ({self.limits.risk_per_trade_pct*100}% of ${account_value})")
@@ -352,28 +357,37 @@ class RiskManager:
         else:
             entry_price = await self._get_current_price(signal.symbol)
             logger.debug(f"Current price for {signal.symbol}: {entry_price}")
-            if not entry_price:
-                logger.warning(f"Could not get current price for {signal.symbol}")
+            if not entry_price or entry_price <= 0:
+                logger.warning(f"Could not get valid current price for {signal.symbol}: {entry_price}")
                 return 0
         
         # Calculate position size based on stop loss
-        if signal.stop_loss:
+        if signal.stop_loss and signal.stop_loss > 0:
             price_risk = abs(entry_price - signal.stop_loss)
-            logger.debug(f"Stop loss: {signal.stop_loss}, Price risk: {price_risk}")
-            if price_risk > 0:
+            price_risk_pct = price_risk / entry_price
+            logger.debug(f"Stop loss: ${signal.stop_loss:.2f}, Price risk: ${price_risk:.2f} ({price_risk_pct*100:.1f}%)")
+            
+            # Sanity check - if stop loss is too far (>50%), something is wrong
+            if price_risk_pct > 0.5:
+                logger.warning(f"Stop loss too far from entry price ({price_risk_pct*100:.1f}%), limiting to 10%")
+                price_risk = entry_price * 0.10
+            
+            if price_risk > 0.001:  # Minimum price risk
                 shares = int(risk_amount / price_risk)
                 logger.debug(f"Shares based on stop loss: {shares}")
             else:
+                logger.warning(f"Price risk too small: ${price_risk:.4f}")
                 shares = 0
         else:
             # Use fixed percentage if no stop loss
             shares = int(risk_amount / (entry_price * 0.02))  # 2% price risk
-            logger.debug(f"No stop loss, using 2% risk. Shares: {shares}")
+            logger.debug(f"No valid stop loss, using 2% risk. Shares: {shares}")
         
         # Apply limits
         max_shares = int(self.limits.max_order_size / entry_price)
+        if shares > max_shares:
+            logger.debug(f"Reducing shares from {shares} to {max_shares} due to max order size limit")
         shares = min(shares, max_shares)
-        logger.debug(f"After max order size limit ({self.limits.max_order_size}): {shares} shares")
         
         # Check existing position
         if signal.symbol in self._positions:
@@ -381,11 +395,19 @@ class RiskManager:
             if signal.is_buy == (existing.quantity > 0):
                 # Adding to position - check position limit
                 max_additional = int(self.limits.max_position_size / entry_price) - abs(existing.quantity)
+                if shares > max_additional:
+                    logger.debug(f"Reducing shares from {shares} to {max_additional} due to position limit")
                 shares = min(shares, max_additional)
-                logger.debug(f"After position limit check: {shares} shares")
+        
+        # Ensure minimum share size (at least 1 share if we have any position size)
+        if 0 < shares < 1:
+            shares = 1
         
         final_shares = max(0, shares)
-        logger.info(f"Final position size for {signal.symbol}: {final_shares} shares")
+        if signal.stop_loss:
+            logger.info(f"Final position size for {signal.symbol}: {final_shares} shares (entry=${entry_price:.2f}, stop=${signal.stop_loss:.2f})")
+        else:
+            logger.info(f"Final position size for {signal.symbol}: {final_shares} shares (entry=${entry_price:.2f}, no stop loss)")
         return final_shares
     
     async def get_portfolio_risk(self) -> PortfolioRisk:

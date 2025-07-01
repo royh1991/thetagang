@@ -121,6 +121,7 @@ class BaseStrategy(ABC):
         self._positions: Dict[str, OrderInfo] = {}  # symbol -> OrderInfo
         self._pending_orders: Set[str] = set()  # order_ids
         self._last_signal_time: Dict[str, float] = {}  # symbol -> timestamp
+        self._processed_orders: Set[str] = set()  # Track processed order IDs to avoid duplicates
         
         # Strategy-specific data storage
         self._data: Dict[str, Any] = {}
@@ -210,9 +211,12 @@ class BaseStrategy(ABC):
             # Let strategy process the tick
             await self.on_tick(tick_data)
             
+            # Check existing positions first before generating new signals
+            await self._check_positions(tick_data)
+            
             # Check if we should generate signals
             should_gen = self._should_generate_signal(tick_data.symbol)
-            logger.debug(f"Should generate signal for {tick_data.symbol}: {should_gen}")
+            logger.debug(f"Should generate signal for {tick_data.symbol}: {should_gen}, positions: {list(self._positions.keys())}")
             if should_gen:
                 signals = await self.calculate_signals(tick_data)
                 if signals:
@@ -226,11 +230,8 @@ class BaseStrategy(ABC):
                         else:
                             logger.warning(f"Signal validation failed for {signal.symbol}")
             
-            # Check existing positions
-            await self._check_positions(tick_data)
-            
         except Exception as e:
-            logger.error(f"Error processing tick for {tick_data.symbol}: {e}")
+            logger.error(f"Error processing tick for {tick_data.symbol}: {e}", exc_info=True)
             await self._emit_strategy_error(str(e))
     
     def _should_generate_signal(self, symbol: str) -> bool:
@@ -342,12 +343,20 @@ class BaseStrategy(ABC):
         if tick_data.symbol not in self._positions:
             return
         
+        # Check if we already have a pending close order for this symbol
+        for order_id in self._pending_orders:
+            order = self.order_manager.get_order(order_id)
+            if order and order.signal.symbol == tick_data.symbol and order.signal.metadata.get("close_reason"):
+                logger.debug(f"Already have pending close order for {tick_data.symbol}")
+                return
+        
         order_info = self._positions[tick_data.symbol]
         
         # Check if we should close the position
         should_close, reason = await self.should_close_position(tick_data, order_info)
         
         if should_close:
+            logger.info(f"Position exit triggered for {tick_data.symbol}: {reason}")
             await self._close_position(tick_data.symbol, reason)
     
     async def _close_position(self, symbol: str, reason: str):
@@ -381,6 +390,17 @@ class BaseStrategy(ABC):
         if not order_info or order_info.signal.strategy_id != self.config.name:
             return
         
+        # Check if we've already processed this order fill
+        if order_info.order_id in self._processed_orders:
+            logger.debug(f"Ignoring duplicate order filled event for {order_info.order_id}")
+            return
+        
+        # Mark as processed
+        self._processed_orders.add(order_info.order_id)
+        
+        logger.info(f"Order filled event for {order_info.signal.symbol}: {order_info.signal.action}, "
+                   f"close_reason: {order_info.signal.metadata.get('close_reason')}")
+        
         self._pending_orders.discard(order_info.order_id)
         
         # Check if this is an opening or closing order
@@ -400,11 +420,16 @@ class BaseStrategy(ABC):
                 
                 logger.info(f"Strategy {self.config.name} closed {symbol} "
                           f"P&L: ${pnl:.2f}")
+            else:
+                logger.warning(f"Closing order for {symbol} but no position found")
         else:
             # Opening order
+            # Store entry price in the signal metadata for future reference
+            order_info.signal.metadata['entry_price'] = order_info.fill_price
             self._positions[order_info.signal.symbol] = order_info
             logger.info(f"Strategy {self.config.name} opened position in "
-                       f"{order_info.signal.symbol}")
+                       f"{order_info.signal.symbol} at ${order_info.fill_price:.2f}, "
+                       f"total positions: {len(self._positions)}")
     
     async def _on_order_rejected(self, event: Event):
         """Handle order rejected events"""

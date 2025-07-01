@@ -444,6 +444,21 @@ class OrderManager:
         
         order_info = self._orders[order_id]
         
+        # Update fill time from execution if available
+        if hasattr(fill.execution, 'time'):
+            # Parse IB's time format (YYYYMMDD HH:MM:SS)
+            try:
+                from datetime import datetime
+                exec_time_str = fill.execution.time
+                # Convert to datetime and then to timestamp
+                exec_dt = datetime.strptime(exec_time_str, "%Y%m%d %H:%M:%S")
+                order_info.fill_time = exec_dt.timestamp()
+            except Exception as e:
+                logger.debug(f"Could not parse execution time: {e}")
+                order_info.fill_time = time.time()
+        else:
+            order_info.fill_time = time.time()
+        
         # Update commission
         if fill.commissionReport:
             order_info.commission = fill.commissionReport.commission

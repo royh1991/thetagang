@@ -5,6 +5,7 @@ Simulates realistic order execution with slippage, commission, and market impact
 """
 
 import asyncio
+import time
 from datetime import datetime
 from typing import Dict, List, Optional, Tuple
 from dataclasses import dataclass, field
@@ -161,8 +162,9 @@ class MockBroker:
         order_info = OrderInfo(
             order_id=order_id,
             signal=signal,
+            ib_order=None,  # MockBroker doesn't use IB orders
             status=OrderStatus.PENDING,
-            timestamp=datetime.now()
+            submit_time=time.time()
         )
         
         # Emit order submitted event
@@ -203,6 +205,8 @@ class MockBroker:
         signal = mock_order.signal
         tick = self.current_prices.get(signal.symbol)
         
+        logger.debug(f"Executing order for {signal.symbol}, tick type: {type(tick)}, has timestamp: {hasattr(tick, 'timestamp') if tick else 'No tick'}")
+        
         if not tick:
             mock_order.status = OrderStatus.REJECTED
             await self._emit_order_rejected(mock_order.order_id, signal, "No market data")
@@ -228,6 +232,17 @@ class MockBroker:
         mock_order.fill_price = fill_price
         mock_order.fill_time = tick.timestamp
         mock_order.commission = commission
+        
+        # Debug: Log the timestamp
+        if tick and hasattr(tick, 'timestamp'):
+            if isinstance(tick.timestamp, (int, float)):
+                from datetime import datetime
+                dt = datetime.fromtimestamp(tick.timestamp)
+                logger.info(f"Fill timestamp for {signal.symbol}: {tick.timestamp} -> {dt} (Historical: {dt.strftime('%Y-%m-%d %H:%M:%S')})")
+            else:
+                logger.info(f"Fill timestamp for {signal.symbol}: {tick.timestamp} (type: {type(tick.timestamp)})")
+        else:
+            logger.warning(f"No timestamp on tick for {signal.symbol}")
         mock_order.slippage = slippage * signal.quantity
         mock_order.status = OrderStatus.FILLED
         mock_order.remaining_quantity = 0
@@ -254,8 +269,9 @@ class MockBroker:
         order_info = OrderInfo(
             order_id=mock_order.order_id,
             signal=signal,
+            ib_order=None,  # MockBroker doesn't use IB orders
             status=OrderStatus.FILLED,
-            timestamp=mock_order.fill_time,
+            fill_time=mock_order.fill_time,
             fill_price=fill_price,
             commission=commission
         )

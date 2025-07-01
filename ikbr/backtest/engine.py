@@ -85,7 +85,11 @@ class BacktestResult:
                            self.equity_curve['value'].iloc[0] - 1)
         
         days = (self.equity_curve.index[-1] - self.equity_curve.index[0]).days
-        self.annualized_return = (1 + self.total_return) ** (365 / days) - 1
+        if days > 0:
+            self.annualized_return = (1 + self.total_return) ** (365 / days) - 1
+        else:
+            # For same-day backtests, annualized return doesn't make sense
+            self.annualized_return = self.total_return * 252  # Rough annualization
         
         # Sharpe ratio (assuming 0% risk-free rate)
         if returns.std() > 0:
@@ -133,7 +137,7 @@ class BacktestResult:
                 if self.losing_trades > 0:
                     self.avg_loss = abs(self.trades[self.trades['pnl'] <= 0]['pnl'].mean())
             
-            if self.avg_loss > 0:
+            if self.avg_loss > 0 and self.losing_trades > 0:
                 self.profit_factor = (self.avg_win * self.winning_trades) / \
                                    (self.avg_loss * self.losing_trades)
             
@@ -216,14 +220,8 @@ class BacktestEngine:
     def add_strategy(self, strategy_class: Type[BaseStrategy], 
                     config: StrategyConfig):
         """Add a strategy to backtest"""
-        # Create strategy instance
-        strategy = strategy_class(
-            config=config,
-            market_data=self.market_data,
-            order_manager=self.order_manager,
-            risk_manager=self.risk_manager
-        )
-        self.strategies.append(strategy)
+        # Store strategy class and config, will create instance after initialization
+        self.strategies.append((strategy_class, config))
         logger.info(f"Added strategy: {config.name}")
     
     async def run(self) -> BacktestResult:
@@ -233,6 +231,18 @@ class BacktestEngine:
         try:
             # Initialize components
             await self._initialize()
+            
+            # Now create strategy instances with initialized components
+            strategy_instances = []
+            for strategy_class, config in self.strategies:
+                strategy = strategy_class(
+                    config=config,
+                    market_data=self.market_data,
+                    order_manager=self.order_manager,
+                    risk_manager=self.risk_manager
+                )
+                strategy_instances.append(strategy)
+            self.strategies = strategy_instances
             
             # Get all symbols from strategies
             symbols = list(set(s for strategy in self.strategies for s in strategy.config.symbols))
@@ -347,6 +357,7 @@ class BacktestEngine:
                 
                 # Update market data manager's tickers via MockIB
                 # This will trigger pendingTickersEvent which MarketDataManager listens to
+                # MarketDataManager will then emit the TICK event
                 self.mock_broker._mock_ib.update_prices({tick.symbol: {
                     'last': tick.last,
                     'bid': tick.bid,
@@ -354,15 +365,16 @@ class BacktestEngine:
                     'high': tick.high,
                     'low': tick.low,
                     'close': tick.close,
-                    'volume': tick.volume
+                    'volume': tick.volume,
+                    'timestamp': tick.timestamp  # Pass historical timestamp
                 }})
                 
-                # Also emit tick event directly for strategies
-                await self.event_bus.emit(Event(
-                    EventTypes.TICK,
-                    tick,
-                    source="BacktestEngine"
-                ), wait=True)  # Wait for handlers to process
+                # NOTE: We don't need to emit tick event here because MarketDataManager
+                # already emits it when pendingTickersEvent is triggered
+                # Removing duplicate tick event emission
+                
+                # Give a tiny bit of time for the tick event to be processed
+                await asyncio.sleep(0.001)
                 
                 # Process pending orders
                 await self.mock_broker.process_orders()
@@ -458,8 +470,21 @@ class BacktestEngine:
         """Record filled orders"""
         order_info = event.data.get('order_info')
         if order_info:
+            # Use the actual fill timestamp from the order
+            # OrderInfo has fill_time, not timestamp
+            if order_info.fill_time:
+                # Convert from float timestamp to datetime if needed
+                if isinstance(order_info.fill_time, (int, float)):
+                    fill_timestamp = datetime.fromtimestamp(order_info.fill_time)
+                else:
+                    fill_timestamp = order_info.fill_time
+            else:
+                # Fallback to current time if no fill_time
+                fill_timestamp = datetime.now()
+                logger.warning(f"No fill_time for order {order_info.order_id}, using current time")
+                
             self.trades.append({
-                'timestamp': datetime.now(),
+                'timestamp': fill_timestamp,
                 'symbol': order_info.signal.symbol,
                 'action': order_info.signal.action,
                 'quantity': order_info.signal.quantity,
@@ -500,6 +525,10 @@ class BacktestEngine:
                             
                             position -= trade['quantity']
                             cost_basis -= trade['quantity'] * avg_cost
+                        else:
+                            # Selling without a position (shouldn't happen in normal trading)
+                            logger.warning(f"Sell order for {symbol} without open position")
+                            trades_df.loc[idx, 'pnl'] = -trade['commission']
         
         # Create result object
         result = BacktestResult(

@@ -84,6 +84,51 @@ port = 4102 if os.getenv('TRADING_MODE', 'paper') == 'paper' else 4101
 - "IBC: Login has completed" when successful
 - API connections work: `ib.connect('localhost', 4102, clientId=1)`
 
+### ⚠️ CRITICAL: IB Gateway Internal Port Mismatch
+
+**Problem**: Even after IB Gateway successfully starts and logs in, API connections may still timeout.
+
+**Root Cause**: IB Gateway's default API port (4000) doesn't match the container's expected port (4002).
+
+**How to Diagnose**:
+1. Check if IB Gateway logged in successfully:
+   ```bash
+   docker logs ibkr-gateway | grep "Login has completed"
+   ```
+2. Check the internal port configuration:
+   ```bash
+   docker exec ibkr-gateway cat /home/ibgateway/Jts/jts.ini | grep LocalServerPort
+   # Output: LocalServerPort=4000 (not 4002!)
+   ```
+3. Verify socat is forwarding to wrong port:
+   ```bash
+   docker exec ibkr-gateway ps aux | grep socat
+   # Shows: socat TCP-LISTEN:4004,fork TCP:127.0.0.1:4002 (but API is on 4000!)
+   ```
+
+**Symptoms**:
+- Container shows "Login has completed"
+- `nc -zv localhost 4102` succeeds (port is open)
+- But Python connection times out: `TimeoutError` when calling `ib.connectAsync()`
+- No API errors in IB Gateway logs
+
+**Solution**: Add the `MASTER_API_PORT` environment variable to docker-compose.yml:
+```yaml
+environment:
+  # ... other variables ...
+  MASTER_API_PORT: 4000  # Override IB Gateway API port to fix internal mismatch
+```
+
+**Why this happens**: 
+- IB Gateway defaults to port 4000 for its API server
+- The gnzsnz/ib-gateway container expects it on port 4002 for paper trading
+- Socat forwards external connections to the wrong internal port
+- This is different from the host port conflict issue above
+
+**Alternative solutions**:
+1. Override in IBC config: Set `OverrideTwsApiPort=4002` in a custom config.ini
+2. Change the container's expectation: Modify `API_PORT` environment variable (deprecated)
+
 ## Implementation Details
 
 ### 1. Docker Configuration
