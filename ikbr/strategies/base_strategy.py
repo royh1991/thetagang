@@ -181,6 +181,12 @@ class BaseStrategy(ABC):
         for symbol in self.config.symbols:
             await self.market_data.unsubscribe_ticker(symbol)
         
+        # Unsubscribe from events to prevent duplicate subscriptions
+        self.event_bus.unsubscribe(EventTypes.TICK, self._on_tick_event)
+        self.event_bus.unsubscribe(EventTypes.ORDER_FILLED, self._on_order_filled)
+        self.event_bus.unsubscribe(EventTypes.ORDER_REJECTED, self._on_order_rejected)
+        self.event_bus.unsubscribe(EventTypes.ORDER_CANCELLED, self._on_order_cancelled)
+        
         # Call strategy-specific cleanup
         await self.on_stop()
         

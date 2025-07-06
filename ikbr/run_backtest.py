@@ -61,9 +61,7 @@ async def run_momentum_backtest():
         }
     )
     
-    # Note: We need to initialize managers first
-    await engine._initialize()
-    
+    # Don't call _initialize() - run() will handle it
     engine.add_strategy(MomentumStrategy, strategy_config)
     
     # Run backtest
@@ -111,7 +109,7 @@ async def run_mean_reversion_backtest():
         }
     )
     
-    await engine._initialize()
+    # Don't call _initialize() - run() will handle it
     engine.add_strategy(MeanReversionStrategy, strategy_config)
     
     # Run backtest
@@ -325,7 +323,7 @@ async def main():
             }
         )
         
-        await engine._initialize()
+        # Don't call _initialize() - run() will handle it
         engine.add_strategy(MomentumStrategy, strategy_config)
         
         result = await engine.run()
@@ -363,7 +361,7 @@ async def main():
             }
         )
         
-        await engine._initialize()
+        # Don't call _initialize() - run() will handle it
         engine.add_strategy(EnhancedMomentumStrategy, strategy_config)
         
         result = await engine.run()
@@ -394,7 +392,7 @@ async def main():
             }
         )
         
-        await engine._initialize()
+        # Don't call _initialize() - run() will handle it
         engine.add_strategy(MeanReversionStrategy, strategy_config)
         
         result = await engine.run()

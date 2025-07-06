@@ -165,6 +165,11 @@ class RiskManager:
             except asyncio.CancelledError:
                 pass
             self._monitoring_task = None
+        
+        # Unsubscribe from events to prevent duplicate subscriptions
+        self.event_bus.unsubscribe(EventTypes.ORDER_FILLED, self._on_order_filled)
+        self.event_bus.unsubscribe(EventTypes.POSITION_UPDATED, self._on_position_updated)
+        
         logger.info("RiskManager stopped")
     
     async def check_order(self, signal: Signal) -> bool:

@@ -300,6 +300,11 @@ class BacktestEngine:
     
     async def _initialize(self):
         """Initialize backtest components"""
+        # Prevent multiple initializations
+        if hasattr(self, '_initialized') and self._initialized:
+            logger.warning("BacktestEngine already initialized, skipping")
+            return
+            
         # Start event bus
         await self.event_bus.start()
         
@@ -328,10 +333,16 @@ class BacktestEngine:
         # Subscribe to events
         self.event_bus.subscribe(EventTypes.ORDER_FILLED, self._on_order_filled)
         
+        # Mark as initialized
+        self._initialized = True
+        
         logger.info("Backtest engine initialized")
     
     async def _cleanup(self):
         """Cleanup after backtest"""
+        # Unsubscribe from events to prevent duplicate subscriptions
+        self.event_bus.unsubscribe(EventTypes.ORDER_FILLED, self._on_order_filled)
+        
         if self.market_data:
             await self.market_data.stop()
         if self.risk_manager:

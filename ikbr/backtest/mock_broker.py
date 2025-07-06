@@ -265,7 +265,7 @@ class MockBroker:
         self.order_history.append(mock_order)
         del self.orders[mock_order.order_id]
         
-        # Create order info with fill details
+        # Create order info with fill details (for logging only)
         order_info = OrderInfo(
             order_id=mock_order.order_id,
             signal=signal,
@@ -276,8 +276,9 @@ class MockBroker:
             commission=commission
         )
         
-        # Emit order filled event
-        await self._emit_order_filled(order_info)
+        # Don't emit ORDER_FILLED here - let OrderManager handle it via MockIB's orderStatusEvent
+        # This prevents duplicate ORDER_FILLED events in backtesting
+        # await self._emit_order_filled(order_info)
         
         # Update MockIB account values after execution
         self._update_mock_ib_account_values()
