@@ -1,0 +1,26 @@
+{
+  "symbol": "OKLO",
+  "strategy": "simple",
+  "days": 30,
+  "bar_size": "1 min",
+  "timestamp": "20250706_234800",
+  "metrics": {
+    "sharpe_ratio": -0.5347783066540888,
+    "max_drawdown_pct": 31.291644075181807,
+    "max_drawdown_duration": 201,
+    "total_return_pct": -10.78914,
+    "annualized_return_pct": -61.95866820777793,
+    "volatility_pct": 4.053874096804814,
+    "calmar_ratio": -1.98003876239021,
+    "win_rate": 0.2146814404432133,
+    "avg_win": 1135.1531612903218,
+    "avg_loss": 328.0703350970016,
+    "profit_factor": 0.9458802119474968,
+    "expectancy": -13.943407202216093,
+    "total_trades": 1444,
+    "avg_trades_per_day": 48.13333333333333
+  },
+  "total_return_pct": -10.78914,
+  "total_trades": 1444,
+  "initial_capital": 100000
+}

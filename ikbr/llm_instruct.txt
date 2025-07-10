@@ -31,12 +31,12 @@ source venv/bin/activate
 The system uses a specific port mapping architecture:
 ```
 Host → Container (socat) → IB Gateway Internal
-4001 → 4003 → 4001 (Live Trading)
-4002 → 4004 → 4002 (Paper Trading)
-5901 → 5900 (VNC Access)
+4101 → 4003 → 4000 (Live Trading)
+4102 → 4004 → 4000 (Paper Trading)
+5900 → 5900 (VNC Access)
 ```
 
-**Critical Understanding**: The container uses socat to forward connections from external ports (4003/4004) to internal IB Gateway ports (4001/4002).
+**Critical Understanding**: The container uses socat to forward connections from external ports (4003/4004) to internal IB Gateway port (4000). Note that we use ports 4101/4102 on the host to avoid conflicts with other services.
 
 ### ⚠️ CRITICAL PORT FORWARDING TROUBLESHOOTING
 
@@ -129,6 +129,62 @@ environment:
 1. Override in IBC config: Set `OverrideTwsApiPort=4002` in a custom config.ini
 2. Change the container's expectation: Modify `API_PORT` environment variable (deprecated)
 
+### ⚠️ CRITICAL: Container State Issues
+
+**Problem**: IB Gateway container is running but API connections timeout with `TimeoutError()` even though the container shows no obvious errors.
+
+**Root Cause**: The IB Gateway container can get stuck in a bad state where:
+- The login dialog is displayed but never progresses
+- Authentication is incomplete despite the container running for a long time
+- Socat shows "Connection refused" errors in logs
+
+**How to Diagnose**:
+1. Check container logs for login status:
+   ```bash
+   docker logs ibkr-gateway | grep -E "(Login|Configuration tasks completed|Authenticating)"
+   ```
+2. Look for socat connection errors:
+   ```bash
+   docker logs ibkr-gateway | grep socat | tail -10
+   # May show: socat[169] E connect(5, AF=2 127.0.0.1:4002, 16): Connection refused
+   ```
+3. Check if container is stuck at login:
+   ```bash
+   docker logs ibkr-gateway | tail -20
+   # Look for: "Starting session: will exit if login dialog is not displayed within 60 seconds"
+   ```
+
+**Symptoms**:
+- Backtest or trading scripts fail with `API connection failed: TimeoutError()`
+- Container is running but not accepting connections
+- No "Login has completed" or "Configuration tasks completed" messages in recent logs
+- VNC shows login dialog but no progress
+
+**Solution**: Restart the container to force a fresh login:
+```bash
+docker-compose restart ib-gateway
+# or
+docker restart ibkr-gateway
+```
+
+**After restart, wait for these log messages**:
+1. "IBC: Login attempt: 1"
+2. "IBC: Authenticating..."
+3. "IBC: Login has completed"
+4. "IBC: Configuration tasks completed"
+
+**Why this happens**:
+- Previous session didn't shut down cleanly
+- Container lost connection to IB servers but didn't recover
+- Authentication timeout without proper recovery
+- Container startup interrupted before completion
+
+**Prevention**:
+- Always check for "Configuration tasks completed" before running scripts
+- Consider implementing a health check that verifies API connectivity
+- Set up container restart policies in docker-compose.yml
+- Monitor container logs for authentication issues
+
 ## Implementation Details
 
 ### 1. Docker Configuration
@@ -136,6 +192,8 @@ environment:
 services:
   ib-gateway:
     image: ghcr.io/gnzsnz/ib-gateway:stable
+    container_name: ibkr-gateway
+    restart: unless-stopped
     environment:
       TWS_USERID: ${TWS_USERID}
       TWS_PASSWORD: ${TWS_PASSWORD}
@@ -144,10 +202,12 @@ services:
       TWOFA_TIMEOUT_ACTION: restart
       AUTO_RESTART_TIME: 11:59 PM
       RELOGIN_AFTER_TWOFA_TIMEOUT: 'yes'
+      MASTER_API_PORT: 4000  # Override IB Gateway API port
+      API_PORT: 4000  # Tell socat where to forward
     ports:
-      - "127.0.0.1:4001:4003"  # Live trading
-      - "127.0.0.1:4002:4004"  # Paper trading
-      - "127.0.0.1:5901:5900"  # VNC
+      - "127.0.0.1:4101:4003"  # Live trading (avoiding port conflicts)
+      - "127.0.0.1:4102:4004"  # Paper trading (avoiding port conflicts)
+      - "127.0.0.1:5900:5900"  # VNC
 ```
 
 ### 2. Connection Management
@@ -155,15 +215,16 @@ services:
 # Critical: Use correct port based on trading mode
 trading_mode = os.getenv('TRADING_MODE', 'paper')
 if trading_mode == 'paper':
-    port = int(os.getenv('IB_GATEWAY_PORT', 4002))
+    port = int(os.getenv('IB_GATEWAY_PORT', 4102))
 else:
-    port = int(os.getenv('IB_GATEWAY_PORT_LIVE', 4001))
+    port = int(os.getenv('IB_GATEWAY_PORT_LIVE', 4101))
 
 # Connection with proper error handling
 try:
     ib.connect('localhost', port, clientId=1)
 except asyncio.TimeoutError:
     # Gateway not ready - wait and retry
+    # Check logs: docker logs ibkr-gateway | grep "Configuration tasks completed"
 ```
 
 ### 3. Event Loop Management
@@ -375,7 +436,7 @@ async def test_order_submission():
 async def test_end_to_end_flow():
     # Connect to paper account
     ib = IB()
-    ib.connect('localhost', 4002, clientId=99)
+    ib.connect('localhost', 4102, clientId=99)
     
     try:
         # Test complete flow
@@ -426,7 +487,7 @@ class ConnectionPool:
         self.connections = []
         for i in range(size):
             ib = IB()
-            ib.connect('localhost', 4002, clientId=i+1)
+            ib.connect('localhost', 4102, clientId=i+1)
             self.connections.append(ib)
     
     async def get_connection(self):
@@ -628,8 +689,11 @@ Remember: Every component must be thoroughly tested before integration. Start wi
    # Always use the correct virtual environment
    source venv/bin/activate
    
-   # Run backtest with proper parameters
-   python run_backtest.py --strategy momentum --days 1 --symbols SPY --capital 250000
+   # Run backtest with proper parameters (backtest2 is the current implementation)
+   python backtest2/run_backtest.py --symbol SPY --days 30 --strategy simple --bar-size "1 min"
+   
+   # Available strategies: simple, enhanced, nick
+   # Available bar sizes: "1 min", "5 mins", "15 mins", "30 mins", "1 hour", "1 day"
    ```
 
 7. **Architecture Best Practices**

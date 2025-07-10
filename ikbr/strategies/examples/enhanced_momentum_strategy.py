@@ -64,6 +64,9 @@ class EnhancedMomentumStrategy(BaseStrategy):
         # Position management
         self.trailing_stops = {}  # symbol -> float
         self.position_high_water_marks = {}  # symbol -> float
+        
+        # Track data points for warmup
+        self.data_points_seen = {}  # symbol -> int
     
     async def on_start(self):
         """Initialize strategy"""
@@ -74,15 +77,18 @@ class EnhancedMomentumStrategy(BaseStrategy):
         if 'SPY' not in all_symbols:
             all_symbols.append('SPY')
             
-        # Initialize data structures
+        # Initialize data structures with larger buffers for backtesting
+        # Use 10000 to handle long backtests (about 40 days of 5-min bars)
+        buffer_size = 10000
         for symbol in all_symbols:
-            self.price_history[symbol] = deque(maxlen=max(self.regime_ma_period, self.ma_period))
-            self.volume_history[symbol] = deque(maxlen=self.lookback_period)
+            self.price_history[symbol] = deque(maxlen=buffer_size)
+            self.volume_history[symbol] = deque(maxlen=buffer_size)
             self.ma_values[symbol] = 0.0
             self.regime_ma_values[symbol] = 0.0
             self.momentum_values[symbol] = 0.0
             self.momentum_acceleration[symbol] = 0.0
             self.volatility[symbol] = 0.0
+            self.data_points_seen[symbol] = 0
             
             # Load historical data if available
             await self._load_historical_data(symbol)
@@ -142,6 +148,7 @@ class EnhancedMomentumStrategy(BaseStrategy):
                 return
             
         self.price_history[symbol].append(tick.last)
+        self.data_points_seen[symbol] = self.data_points_seen.get(symbol, 0) + 1
         
         # Update volume history
         if tick.volume and symbol != 'SPY':
@@ -172,8 +179,10 @@ class EnhancedMomentumStrategy(BaseStrategy):
         if symbol == 'SPY' and symbol not in self.config.symbols:
             return signals
         
-        # Need enough data
-        if len(self.price_history[symbol]) < self.ma_period:
+        # Need enough data - require at least regime_ma_period for proper analysis
+        min_required_points = max(self.ma_period, self.regime_ma_period, self.lookback_period * 2)
+        if len(self.price_history[symbol]) < min_required_points:
+            logger.debug(f"{symbol}: Warming up... {len(self.price_history[symbol])}/{min_required_points} data points")
             return signals
         
         # Check market regime
@@ -199,6 +208,11 @@ class EnhancedMomentumStrategy(BaseStrategy):
             avg_volume = np.mean(list(self.volume_history[symbol]))
             current_volume = tick.volume or 0
             volume_condition = current_volume > avg_volume * self.volume_multiplier
+        
+        # Log when we start generating signals for the first time
+        if symbol not in self.trailing_stops and len(self.price_history[symbol]) >= min_required_points:
+            logger.info(f"📊 {symbol}: Ready to trade after {self.data_points_seen.get(symbol, 0)} ticks "
+                       f"({len(self.price_history[symbol])} in buffer)")
         
         # Enhanced buy signal conditions
         if (current_price > current_ma and 
@@ -317,8 +331,12 @@ class EnhancedMomentumStrategy(BaseStrategy):
         momentum_accel = self.momentum_acceleration.get(symbol, 0)
         
         if position.signal.is_buy:
-            # Exit long if momentum turns negative or decelerates sharply
-            if current_momentum < 0 or (momentum_accel < -0.001 and current_momentum < self.momentum_threshold * 0.5):
+            # Exit long if momentum turns strongly negative
+            # Make this less sensitive - only exit if momentum is clearly negative
+            if current_momentum < -self.momentum_threshold:
+                return True, "momentum_reversal"
+            # Or if momentum decelerates very sharply
+            elif momentum_accel < -0.01 and current_momentum < 0:
                 return True, "momentum_deceleration"
         
         # Exit if we're outside trading windows and position is profitable
@@ -401,9 +419,9 @@ class EnhancedMomentumStrategy(BaseStrategy):
     
     async def _load_historical_data(self, symbol: str):
         """Load historical data for indicators"""
-        # This would load historical data from market data manager
-        # For now, we'll start fresh
-        logger.debug(f"Historical data loading for {symbol} not implemented yet")
+        # For now, we'll rely on accumulating data during the backtest
+        # The increased buffer size (10000) will allow us to store much more history
+        logger.debug(f"Strategy will accumulate historical data for {symbol} during backtest")
 
 
 # Configuration helper

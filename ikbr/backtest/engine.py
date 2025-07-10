@@ -361,6 +361,8 @@ class BacktestEngine:
             # Sort by timestamp
             all_ticks.sort(key=lambda t: t.timestamp)
             
+            logger.info(f"Processing {len(all_ticks)} total ticks from {len(self.current_ticks)} symbols")
+            
             # Process each tick
             for i, tick in enumerate(all_ticks):
                 # Update mock broker with current price
@@ -481,6 +483,17 @@ class BacktestEngine:
         """Record filled orders"""
         order_info = event.data.get('order_info')
         if order_info:
+            # Track processed orders to prevent duplicates
+            if not hasattr(self, '_processed_orders'):
+                self._processed_orders = set()
+            
+            # Skip if we've already processed this order
+            if order_info.order_id in self._processed_orders:
+                logger.debug(f"Skipping duplicate order fill: {order_info.order_id}")
+                return
+            
+            self._processed_orders.add(order_info.order_id)
+            
             # Use the actual fill timestamp from the order
             # OrderInfo has fill_time, not timestamp
             if order_info.fill_time:
