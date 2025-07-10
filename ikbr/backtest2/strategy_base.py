@@ -3,7 +3,8 @@ Simple base class for trading strategies
 """
 from abc import ABC, abstractmethod
 from datetime import datetime
-from typing import Optional, List, Dict, Any
+from dataclasses import dataclass
+from typing import Optional, List, Dict, Any, Union, Tuple
 from loguru import logger
 
 
@@ -22,10 +23,32 @@ class Bar:
 
 
 class Signal:
-    """Trading signal"""
+    """Trading signal constants"""
     BUY = 'BUY'
     SELL = 'SELL'
     HOLD = 'HOLD'
+
+
+@dataclass
+class SignalInfo:
+    """Trading signal with detailed reason"""
+    signal: str  # BUY, SELL, or HOLD
+    reason: str = ""  # Detailed reason for the signal
+    
+    @classmethod
+    def buy(cls, reason: str) -> 'SignalInfo':
+        """Create a BUY signal with reason"""
+        return cls(Signal.BUY, reason)
+    
+    @classmethod
+    def sell(cls, reason: str) -> 'SignalInfo':
+        """Create a SELL signal with reason"""
+        return cls(Signal.SELL, reason)
+    
+    @classmethod
+    def hold(cls, reason: str = "") -> 'SignalInfo':
+        """Create a HOLD signal with optional reason"""
+        return cls(Signal.HOLD, reason)
 
 
 class StrategyBase(ABC):
@@ -38,7 +61,7 @@ class StrategyBase(ABC):
         self.current_bar: Optional[Bar] = None
         self.metadata: Dict[str, Any] = {}  # Strategy-specific data
         
-    def on_bar(self, bar: Bar) -> str:
+    def on_bar(self, bar: Bar) -> Union[str, SignalInfo]:
         """
         Called when a new bar is received
         
@@ -46,14 +69,20 @@ class StrategyBase(ABC):
             bar: The new price bar
             
         Returns:
-            Signal: BUY, SELL, or HOLD
+            Signal string or SignalInfo object
         """
         # Store the bar
         self.current_bar = bar
         self.bars.append(bar)
         
         # Call strategy-specific logic
-        signal = self.calculate_signal(bar)
+        result = self.calculate_signal(bar)
+        
+        # Handle both old string format and new SignalInfo format
+        if isinstance(result, SignalInfo):
+            signal = result.signal
+        else:
+            signal = result
         
         # Update position tracking
         if signal == Signal.BUY and self.position == 0:
@@ -61,10 +90,10 @@ class StrategyBase(ABC):
         elif signal == Signal.SELL and self.position > 0:
             self.position = 0
         
-        return signal
+        return result
     
     @abstractmethod
-    def calculate_signal(self, bar: Bar) -> str:
+    def calculate_signal(self, bar: Bar) -> Union[str, SignalInfo]:
         """
         Strategy-specific signal calculation
         
@@ -72,7 +101,7 @@ class StrategyBase(ABC):
             bar: Current price bar
             
         Returns:
-            Signal: BUY, SELL, or HOLD
+            Signal string or SignalInfo object with signal and reason
         """
         pass
     

@@ -2,10 +2,10 @@
 Nick's Funnel Breakout Strategy
 Based on Pine Script that combines breakout detection with trend/chop filtering
 """
-from typing import List, Optional, Tuple, Dict
+from typing import List, Optional, Tuple, Dict, Union
 import numpy as np
 from loguru import logger
-from .strategy_base import StrategyBase, Bar, Signal
+from .strategy_base import StrategyBase, Bar, Signal, SignalInfo
 from .data_fetcher import DataFetcher
 import pandas as pd
 
@@ -59,12 +59,12 @@ class NickStrategy(StrategyBase):
         # Initialize data fetcher for SPY
         self.data_fetcher = DataFetcher()
         
-    def calculate_signal(self, bar: Bar) -> str:
+    def calculate_signal(self, bar: Bar) -> Union[str, SignalInfo]:
         """Calculate trading signal based on funnel breakout strategy"""
         
         # Need enough history
         if len(self.bars) < max(self.lookback_period, 50):
-            return Signal.HOLD
+            return SignalInfo.hold("Insufficient history")
             
         # Calculate technical indicators
         self._update_indicators()
@@ -115,32 +115,42 @@ class NickStrategy(StrategyBase):
             if bar.close <= self.stop_loss:
                 logger.info(f"Long stop loss hit at {bar.close:.2f}")
                 self.entered_long = False
-                return Signal.SELL
+                return SignalInfo.sell(f"Stop loss hit at ${bar.close:.2f} (SL: ${self.stop_loss:.2f})")
             elif bar.close >= self.take_profit:
                 logger.info(f"Long take profit hit at {bar.close:.2f}")
                 self.entered_long = False
-                return Signal.SELL
+                return SignalInfo.sell(f"Take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})")
         
         if self.entered_short and self.position < 0:
             if bar.close >= self.stop_loss:
                 logger.info(f"Short stop loss hit at {bar.close:.2f}")
                 self.entered_short = False
-                return Signal.BUY  # Buy to cover short
+                return SignalInfo.buy(f"Short stop loss hit at ${bar.close:.2f} (SL: ${self.stop_loss:.2f})")
             elif bar.close <= self.take_profit:
                 logger.info(f"Short take profit hit at {bar.close:.2f}")
                 self.entered_short = False
-                return Signal.BUY  # Buy to cover short
+                return SignalInfo.buy(f"Short take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})")
         
         # Generate signals
         if exit_long and self.position > 0:
             logger.info(f"Exit long signal: choppy={is_choppy}, below_sma={bar.close < sma_exit}")
             self.entered_long = False
-            return Signal.SELL
+            exit_reasons = []
+            if is_choppy:
+                exit_reasons.append(f"Market choppy (ADX={current_adx:.1f})")
+            if bar.close < sma_exit:
+                exit_reasons.append(f"Price ${bar.close:.2f} < 5-SMA ${sma_exit:.2f}")
+            return SignalInfo.sell(" + ".join(exit_reasons))
             
         if exit_short and self.position < 0:
             logger.info(f"Exit short signal: choppy={is_choppy}, above_sma={bar.close > sma_exit}")
             self.entered_short = False
-            return Signal.BUY  # Buy to cover
+            exit_reasons = []
+            if is_choppy:
+                exit_reasons.append(f"Market choppy (ADX={current_adx:.1f})")
+            if bar.close > sma_exit:
+                exit_reasons.append(f"Price ${bar.close:.2f} > 5-SMA ${sma_exit:.2f}")
+            return SignalInfo.buy(" + ".join(exit_reasons))
             
         if long_signal and self.position == 0:
             logger.info(f"Long signal: ADX={current_adx:.1f}, RSI={current_rsi:.1f}, "
@@ -152,7 +162,20 @@ class NickStrategy(StrategyBase):
             self.metadata['entry_type'] = 'long'
             self.metadata['stop_loss'] = self.stop_loss
             self.metadata['take_profit'] = self.take_profit
-            return Signal.BUY
+            
+            # Build detailed reason
+            reasons = []
+            reasons.append(f"Breakout > ${range_high:.2f}")
+            reasons.append(f"ADX={current_adx:.1f}")
+            reasons.append(f"RSI={current_rsi:.1f}")
+            if volume_spike:
+                reasons.append(f"Vol spike {self.volume_multiplier:.1f}x")
+            if macro_bullish:
+                reasons.append("SPY bullish")
+            reasons.append(f"SL=${self.stop_loss:.2f}")
+            reasons.append(f"TP=${self.take_profit:.2f}")
+            
+            return SignalInfo.buy(" | ".join(reasons))
             
         if short_signal and self.position == 0:
             logger.info(f"Short signal: ADX={current_adx:.1f}, RSI={current_rsi:.1f}, "
@@ -167,7 +190,7 @@ class NickStrategy(StrategyBase):
             # Note: Our simple backtest doesn't support shorting, so we'll skip short trades
             logger.warning("Short signal generated but backtester doesn't support shorting")
             
-        return Signal.HOLD
+        return SignalInfo.hold()
     
     def _update_indicators(self):
         """Update technical indicators"""

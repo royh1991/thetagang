@@ -40,7 +40,7 @@ class BrokerSimulator:
         self.trade_counter = 0  # Track trade numbers
         self.position_size_pct = position_size_pct  # Percentage of equity to use per trade
         
-    def buy(self, symbol: str, price: float, quantity: Optional[int] = None, timestamp: Optional[datetime] = None) -> bool:
+    def buy(self, symbol: str, price: float, quantity: Optional[int] = None, timestamp: Optional[datetime] = None, reason: str = "") -> bool:
         """
         Execute a buy order
         
@@ -107,14 +107,14 @@ class BrokerSimulator:
             position_before=position_before,
             position_after=self.position,
             trade_number=self.trade_counter,
-            signal='BUY'  # Will be updated by backtest engine if needed
+            signal=reason or 'BUY'  # Use the provided reason
         )
         self.trades.append(trade)
         
         logger.info(f"BUY {quantity} {symbol} @ ${price:.2f}, cost=${total_cost:.2f}, cash=${self.cash:.2f}")
         return True
     
-    def sell(self, symbol: str, price: float, quantity: Optional[int] = None, timestamp: Optional[datetime] = None) -> bool:
+    def sell(self, symbol: str, price: float, quantity: Optional[int] = None, timestamp: Optional[datetime] = None, reason: str = "") -> bool:
         """
         Execute a sell order
         
@@ -178,7 +178,7 @@ class BrokerSimulator:
             pnl=pnl,
             return_pct=return_pct,
             trade_number=self.trade_counter,
-            signal='SELL'  # Will be updated by backtest engine if needed
+            signal=reason or 'SELL'  # Use the provided reason
         )
         self.trades.append(trade)
         

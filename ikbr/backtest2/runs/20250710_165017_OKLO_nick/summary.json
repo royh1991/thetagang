@@ -1,0 +1,26 @@
+{
+  "symbol": "OKLO",
+  "strategy": "nick",
+  "days": 130,
+  "bar_size": "5 mins",
+  "timestamp": "20250710_165017",
+  "metrics": {
+    "sharpe_ratio": 0.0,
+    "max_drawdown_pct": 0.0,
+    "max_drawdown_duration": 0,
+    "total_return_pct": 0.0,
+    "annualized_return_pct": 0.0,
+    "volatility_pct": 0.0,
+    "calmar_ratio": 0,
+    "win_rate": 0.0,
+    "avg_win": 0.0,
+    "avg_loss": 0.0,
+    "profit_factor": 0.0,
+    "expectancy": 0.0,
+    "total_trades": 0,
+    "avg_trades_per_day": 0.0
+  },
+  "total_return_pct": 0.0,
+  "total_trades": 0,
+  "initial_capital": 1000000
+}

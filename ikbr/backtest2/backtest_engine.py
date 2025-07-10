@@ -8,7 +8,7 @@ from loguru import logger
 
 from .data_fetcher import DataFetcher
 from .broker_simulator import BrokerSimulator
-from .strategy_base import StrategyBase, Bar, Signal
+from .strategy_base import StrategyBase, Bar, Signal, SignalInfo
 
 
 class BacktestEngine:
@@ -77,14 +77,23 @@ class BacktestEngine:
             )
             
             # Process bar through strategy
-            signal = self.strategy.on_bar(bar)
+            result = self.strategy.on_bar(bar)
+            
+            # Handle both old string format and new SignalInfo format
+            if isinstance(result, SignalInfo):
+                signal = result.signal
+                reason = result.reason
+            else:
+                signal = result
+                reason = ""
+            
             signal_count[signal] += 1
             
             # Execute trades based on signal
             if signal == Signal.BUY:
-                self.broker.buy(symbol, bar.close, timestamp=bar.timestamp)
+                self.broker.buy(symbol, bar.close, timestamp=bar.timestamp, reason=reason)
             elif signal == Signal.SELL:
-                self.broker.sell(symbol, bar.close, timestamp=bar.timestamp)
+                self.broker.sell(symbol, bar.close, timestamp=bar.timestamp, reason=reason)
             
             bar_count += 1
             
@@ -96,7 +105,8 @@ class BacktestEngine:
         if self.broker.position > 0:
             last_bar = self.data.iloc[-1]
             logger.info(f"Closing open position at end of backtest")
-            self.broker.sell(symbol, last_bar['close'], timestamp=last_bar['timestamp'])
+            self.broker.sell(symbol, last_bar['close'], timestamp=last_bar['timestamp'], 
+                           reason="End of backtest - closing open position")
         
         # Compile results
         final_price = self.data.iloc[-1]['close']
