@@ -26,7 +26,8 @@ class NickStrategy(StrategyBase):
                  volume_multiplier: float = 1.5,
                  take_profit_atr: float = 2.0,
                  stop_loss_atr: float = 1.0,
-                 adx_trend_threshold: int = 20):
+                 adx_trend_threshold: int = 20,
+                 debug: bool = False):
         super().__init__(symbol)
         
         # Strategy parameters
@@ -36,6 +37,7 @@ class NickStrategy(StrategyBase):
         self.take_profit_atr = take_profit_atr
         self.stop_loss_atr = stop_loss_atr
         self.adx_trend_threshold = adx_trend_threshold
+        self.debug = debug
         
         # Technical indicators storage
         self.rsi_values = []
@@ -56,15 +58,26 @@ class NickStrategy(StrategyBase):
         self.stop_loss = 0.0
         self.take_profit = 0.0
         
+        # Debug data storage
+        self.debug_data = []
+        
         # Initialize data fetcher for SPY
         self.data_fetcher = DataFetcher()
+    
+    def _return_signal(self, signal_info: SignalInfo) -> SignalInfo:
+        """Helper method to store final signal and return it"""
+        if self.debug and self.debug_data:
+            # Add final signal to the last debug row
+            self.debug_data[-1]['final_signal'] = signal_info.signal
+            self.debug_data[-1]['signal_reason'] = signal_info.reason
+        return signal_info
         
     def calculate_signal(self, bar: Bar) -> Union[str, SignalInfo]:
         """Calculate trading signal based on funnel breakout strategy"""
         
         # Need enough history
         if len(self.bars) < max(self.lookback_period, 50):
-            return SignalInfo.hold("Insufficient history")
+            return self._return_signal(SignalInfo.hold("Insufficient history"))
             
         # Calculate technical indicators
         self._update_indicators()
@@ -110,26 +123,62 @@ class NickStrategy(StrategyBase):
         exit_short = (self.entered_short and not short_signal and 
                      (is_choppy or bar.close > sma_exit))
         
+        # Debug data collection
+        if self.debug:
+            debug_row = {
+                'timestamp': bar.timestamp,
+                'price': bar.close,
+                'volume': bar.volume,
+                'rsi': current_rsi,
+                'adx': current_adx,
+                'atr': current_atr,
+                'range_low': range_low,
+                'range_high': range_high,
+                'sma_5': sma_exit,
+                'avg_volume': avg_volume,
+                'volume_spike_threshold': avg_volume * self.volume_multiplier,
+                'is_trending': is_trending,
+                'is_choppy': is_choppy,
+                'bull_breakout': bull_breakout,
+                'bear_breakdown': bear_breakdown,
+                'rsi_bullish': rsi_bullish,
+                'rsi_bearish': rsi_bearish,
+                'volume_spike': volume_spike,
+                'macro_bullish': macro_bullish,
+                'macro_bearish': macro_bearish,
+                'long_signal': long_signal,
+                'short_signal': short_signal,
+                'exit_long': exit_long,
+                'exit_short': exit_short,
+                'currently_long': self.entered_long,
+                'currently_short': self.entered_short,
+                'entry_price': self.entry_price if (self.entered_long or self.entered_short) else None,
+                'stop_loss': self.stop_loss if (self.entered_long or self.entered_short) else None,
+                'take_profit': self.take_profit if (self.entered_long or self.entered_short) else None,
+                'position': self.position
+            }
+            self.debug_data.append(debug_row)
+        
         # Check stop loss and take profit
         if self.entered_long:
             if bar.close <= self.stop_loss:
                 logger.info(f"Long stop loss hit at {bar.close:.2f}")
                 self.entered_long = False
-                return SignalInfo.sell(f"Stop loss hit at ${bar.close:.2f} (SL: ${self.stop_loss:.2f})")
+                return self._return_signal(SignalInfo.sell(f"Stop loss hit at ${bar.close:.2f} (SL: ${self.stop_loss:.2f})"))
             elif bar.close >= self.take_profit:
                 logger.info(f"Long take profit hit at {bar.close:.2f}")
                 self.entered_long = False
-                return SignalInfo.sell(f"Take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})")
+                return self._return_signal(SignalInfo.sell(f"Take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})"))
         
         if self.entered_short and self.position < 0:
             if bar.close >= self.stop_loss:
                 logger.info(f"Short stop loss hit at {bar.close:.2f}")
                 self.entered_short = False
-                return SignalInfo.buy(f"Short stop loss hit at ${bar.close:.2f} (SL: ${self.stop_loss:.2f})")
+                return self._return_signal(SignalInfo.buy(f"Short stop loss hit at ${bar.close:.2f} (SL: ${self.stop_loss:.2f})"))
             elif bar.close <= self.take_profit:
                 logger.info(f"Short take profit hit at {bar.close:.2f}")
                 self.entered_short = False
-                return SignalInfo.buy(f"Short take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})")
+                return self._return_signal(SignalInfo.buy(f"Short take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})"))
         
         # Generate signals
         if exit_long and self.position > 0:
@@ -140,7 +189,7 @@ class NickStrategy(StrategyBase):
                 exit_reasons.append(f"Market choppy (ADX={current_adx:.1f})")
             if bar.close < sma_exit:
                 exit_reasons.append(f"Price ${bar.close:.2f} < 5-SMA ${sma_exit:.2f}")
-            return SignalInfo.sell(" + ".join(exit_reasons))
+            return self._return_signal(SignalInfo.sell(" + ".join(exit_reasons)))
             
         if exit_short and self.position < 0:
             logger.info(f"Exit short signal: choppy={is_choppy}, above_sma={bar.close > sma_exit}")
@@ -150,7 +199,7 @@ class NickStrategy(StrategyBase):
                 exit_reasons.append(f"Market choppy (ADX={current_adx:.1f})")
             if bar.close > sma_exit:
                 exit_reasons.append(f"Price ${bar.close:.2f} > 5-SMA ${sma_exit:.2f}")
-            return SignalInfo.buy(" + ".join(exit_reasons))
+            return self._return_signal(SignalInfo.buy(" + ".join(exit_reasons)))
             
         if long_signal and self.position == 0:
             logger.info(f"Long signal: ADX={current_adx:.1f}, RSI={current_rsi:.1f}, "
@@ -175,7 +224,7 @@ class NickStrategy(StrategyBase):
             reasons.append(f"SL=${self.stop_loss:.2f}")
             reasons.append(f"TP=${self.take_profit:.2f}")
             
-            return SignalInfo.buy(" | ".join(reasons))
+            return self._return_signal(SignalInfo.buy(" | ".join(reasons)))
             
         if short_signal and self.position == 0:
             logger.info(f"Short signal: ADX={current_adx:.1f}, RSI={current_rsi:.1f}, "
@@ -190,7 +239,7 @@ class NickStrategy(StrategyBase):
             # Note: Our simple backtest doesn't support shorting, so we'll skip short trades
             logger.warning("Short signal generated but backtester doesn't support shorting")
             
-        return SignalInfo.hold()
+        return self._return_signal(SignalInfo.hold())
     
     def _update_indicators(self):
         """Update technical indicators"""
@@ -403,3 +452,14 @@ class NickStrategy(StrategyBase):
             indicators['SMA50'] = sma50
         
         return indicators
+    
+    def save_debug_csv(self, filename: str):
+        """Save debug data to CSV file"""
+        if not self.debug or not self.debug_data:
+            logger.warning("No debug data to save")
+            return
+        
+        # Convert to DataFrame and save
+        df = pd.DataFrame(self.debug_data)
+        df.to_csv(filename, index=False)
+        logger.info(f"Debug data saved to {filename} ({len(df)} rows)")

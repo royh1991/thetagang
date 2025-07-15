@@ -185,6 +185,90 @@ docker restart ibkr-gateway
 - Set up container restart policies in docker-compose.yml
 - Monitor container logs for authentication issues
 
+### ⚠️ CRITICAL: Extended Authentication Delays and Multiple Restart Requirements
+
+**Problem**: IB Gateway container requires multiple restarts and extended wait times before becoming operational, even when no obvious errors are present.
+
+**Real-World Example**:
+In a recent session, it took:
+- **Total time**: ~1 hour 16 minutes to get a working connection
+- **Number of restarts**: 3 (including one full docker-compose down/up cycle)
+- **Failed connection attempts**: 6
+- **Final successful wait time**: ~2 minutes after last restart
+
+**Timeline of Issues**:
+1. Initial attempt: `API connection failed: TimeoutError()`
+2. Second attempt: `Peer closed connection. clientId 1 already in use?`
+3. After restart: Still `TimeoutError()` (container appeared healthy but wasn't)
+4. After full down/up: Still `TimeoutError()` 
+5. After final restart: Success after ~2 minutes
+
+**Root Causes**:
+1. **Stale container state**: Previous sessions don't clean up properly
+2. **Port binding issues**: Sockets remain in TIME_WAIT state
+3. **IB Gateway internal state**: Login dialog stuck or authentication incomplete
+4. **Race conditions**: Container reports ready before API is actually available
+
+**Automated Solution - Health Check Scripts**:
+
+We've created two scripts to handle this automatically:
+
+1. **`scripts/check_ib_gateway.sh`** - Health check and auto-restart tool
+   ```bash
+   # Check health
+   ./scripts/check_ib_gateway.sh check
+   
+   # Force restart with monitoring
+   ./scripts/check_ib_gateway.sh restart
+   
+   # Continuous monitoring mode
+   ./scripts/check_ib_gateway.sh auto
+   ```
+
+2. **`scripts/run_backtest_with_retry.sh`** - Wrapper for backtests with auto-recovery
+   ```bash
+   # Run backtest with automatic IB Gateway recovery
+   ./scripts/run_backtest_with_retry.sh --symbol OKLO --days 5 --strategy nick
+   ```
+
+**What the scripts do**:
+- Check container is running
+- Verify "Login has completed" and "Configuration tasks completed" in logs
+- Test actual API connectivity with a test connection
+- Automatically restart and retry up to 3 times
+- Wait up to 2 minutes for authentication
+- Provide colored output for easy status monitoring
+
+**Manual Troubleshooting Steps**:
+1. Check container logs for authentication status:
+   ```bash
+   docker logs ibkr-gateway | grep -E "(Login has completed|Configuration tasks completed)"
+   ```
+
+2. If stuck, perform a full restart:
+   ```bash
+   docker-compose down
+   docker-compose up -d ib-gateway
+   ```
+
+3. Wait for these specific log entries (in order):
+   - "IBC: Login attempt: 1"
+   - "IBC: Authenticating..."  
+   - "IBC: Login has completed"
+   - "IBC: Configuration tasks completed"
+
+4. Test connection before running scripts:
+   ```bash
+   nc -zv localhost 4102  # Should show "succeeded"
+   ```
+
+**Best Practices**:
+- Always use the wrapper scripts for production runs
+- Implement connection retry logic in your Python code
+- Set reasonable timeouts (10-30 seconds for connection attempts)
+- Log all connection attempts for debugging
+- Consider running the health check in cron for production systems
+
 ## Implementation Details
 
 ### 1. Docker Configuration

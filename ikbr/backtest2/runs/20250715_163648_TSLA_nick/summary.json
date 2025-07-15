@@ -1,0 +1,26 @@
+{
+  "symbol": "TSLA",
+  "strategy": "nick",
+  "days": 100,
+  "bar_size": "5 mins",
+  "timestamp": "20250715_163648",
+  "metrics": {
+    "sharpe_ratio": -8.584591190473196,
+    "max_drawdown_pct": 1.2786770000000018,
+    "max_drawdown_duration": 2982,
+    "total_return_pct": -0.09667199999997393,
+    "annualized_return_pct": -0.24295696977130188,
+    "volatility_pct": 0.23330958424632123,
+    "calmar_ratio": -0.19000652218762168,
+    "win_rate": 0.4574468085106383,
+    "avg_win": 981.4988372093014,
+    "avg_loss": 844.6503921568641,
+    "profit_factor": 0.9797405447015181,
+    "expectancy": -9.284255319150134,
+    "total_trades": 188,
+    "avg_trades_per_day": 1.88
+  },
+  "total_return_pct": -0.09667199999997393,
+  "total_trades": 188,
+  "initial_capital": 1000000
+}

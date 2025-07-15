@@ -1,0 +1,26 @@
+{
+  "symbol": "XLV",
+  "strategy": "nick",
+  "days": 100,
+  "bar_size": "15 mins",
+  "timestamp": "20250715_160952",
+  "metrics": {
+    "sharpe_ratio": -19.272561417880514,
+    "max_drawdown_pct": 0.6734648954149629,
+    "max_drawdown_duration": 0,
+    "total_return_pct": -0.47738699999997625,
+    "annualized_return_pct": -1.196371031897936,
+    "volatility_pct": 0.1061902037065988,
+    "calmar_ratio": -1.776441563685036,
+    "win_rate": 0.391304347826087,
+    "avg_win": 322.5199999999993,
+    "avg_loss": 546.6821428571437,
+    "profit_factor": 0.37925929797283475,
+    "expectancy": -206.5595652173921,
+    "total_trades": 46,
+    "avg_trades_per_day": 0.46
+  },
+  "total_return_pct": -0.47738699999997625,
+  "total_trades": 46,
+  "initial_capital": 1000000
+}
