@@ -27,3 +27,29 @@ ib-gateway-data/
 
 # Mac
 .DS_Store
+
+# Backtest outputs and cache
+backtest2/runs/
+backtest2/data_cache/
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+
+# Test files
+test_*.py
+debug_*.py
+check_*.py
+run_*.py
+trace_*.py
+
+# Jupyter Notebooks checkpoints
+.ipynb_checkpoints/
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
