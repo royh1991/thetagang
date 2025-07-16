@@ -22,11 +22,12 @@ class NickStrategy(StrategyBase):
     
     def __init__(self, symbol: str, 
                  lookback_period: int = 20,
-                 rsi_threshold: int = 50,
-                 volume_multiplier: float = 1.5,
-                 take_profit_atr: float = 2.0,
+                 rsi_threshold: int = 55,
+                 volume_multiplier: float = 2.0,
+                 take_profit_atr: float = 2.5,
                  stop_loss_atr: float = 1.0,
-                 adx_trend_threshold: int = 20,
+                 adx_trend_threshold: int = 30,
+                 exit_sma_length: int = 5,
                  debug: bool = False):
         super().__init__(symbol)
         
@@ -37,6 +38,7 @@ class NickStrategy(StrategyBase):
         self.take_profit_atr = take_profit_atr
         self.stop_loss_atr = stop_loss_atr
         self.adx_trend_threshold = adx_trend_threshold
+        self.exit_sma_length = exit_sma_length
         self.debug = debug
         
         # Technical indicators storage
@@ -51,9 +53,8 @@ class NickStrategy(StrategyBase):
         self.spy_sma20 = []
         self.spy_sma50 = []
         
-        # Entry tracking
+        # Entry tracking (long only)
         self.entered_long = False
-        self.entered_short = False
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.take_profit = 0.0
@@ -97,9 +98,17 @@ class NickStrategy(StrategyBase):
         # Check market context (SPY trend)
         macro_bullish, macro_bearish = self._check_market_context()
         
-        # Calculate range breakout
-        range_high = max(b.high for b in self.bars[-self.lookback_period-1:-1])
-        range_low = min(b.low for b in self.bars[-self.lookback_period-1:-1])
+        # Calculate range breakout (excluding current bar, matching Pine's high[1] notation)
+        # Pine uses ta.highest(high[1], lengthRange) which looks at previous bars only
+        if len(self.bars) > self.lookback_period:
+            # Get the previous lookback_period bars, excluding the current one
+            # self.bars[-self.lookback_period-1:-1] gets previous lookback_period bars
+            range_high = max(b.high for b in self.bars[-self.lookback_period-1:-1])
+            range_low = min(b.low for b in self.bars[-self.lookback_period-1:-1])
+        else:
+            # Not enough history
+            range_high = bar.high
+            range_low = bar.low
         
         bull_breakout = bar.close > range_high
         bear_breakdown = bar.close < range_low
@@ -116,19 +125,29 @@ class NickStrategy(StrategyBase):
         is_trending = current_adx > self.adx_trend_threshold
         is_choppy = current_adx <= self.adx_trend_threshold
         
-        # Entry signals
+        # Entry signals (Pine Script only trades long)
         long_signal = (is_trending and macro_bullish and bull_breakout and 
                       volume_spike and rsi_bullish)
-        short_signal = (is_trending and macro_bearish and bear_breakdown and 
-                       volume_spike and rsi_bearish)
+        # Pine Script doesn't implement short trading
+        short_signal = False
         
-        # Exit conditions
-        sma_exit = sum(b.close for b in self.bars[-5:]) / 5  # 5-period SMA
+        # Exit conditions - Calculate SMA for exit
+        sma_exit = None
+        if len(self.bars) >= self.exit_sma_length:
+            sma_exit = sum(b.close for b in self.bars[-self.exit_sma_length:]) / self.exit_sma_length
         
-        exit_long = (self.entered_long and not long_signal and 
-                    (is_choppy or bar.close < sma_exit))
-        exit_short = (self.entered_short and not short_signal and 
-                     (is_choppy or bar.close > sma_exit))
+        # Check for two consecutive bars below SMA for exit (long only)
+        smooth_exit_long = False
+        
+        if sma_exit and len(self.bars) >= self.exit_sma_length + 1:
+            # Current bar and previous bar
+            bar0_below = bar.close < sma_exit
+            bar1_below = self.bars[-2].close < sma_exit
+            smooth_exit_long = bar0_below and bar1_below
+        
+        # Exit signal based on 2 consecutive bars below SMA
+        exit_long = self.entered_long and smooth_exit_long
+        exit_short = False  # No short trading
         
         # Debug data collection
         if self.debug:
@@ -153,7 +172,11 @@ class NickStrategy(StrategyBase):
                 'atr': current_atr,
                 'range_low': range_low,
                 'range_high': range_high,
-                'sma_5': sma_exit,
+                'exit_sma': sma_exit if sma_exit else None,
+                'exit_sma_length': self.exit_sma_length,
+                'bar0_below_sma': bar.close < sma_exit if sma_exit else None,
+                'bar1_below_sma': self.bars[-2].close < sma_exit if sma_exit and len(self.bars) >= 2 else None,
+                'smooth_exit_long': smooth_exit_long,
                 'avg_volume': avg_volume,
                 'volume_spike_threshold': avg_volume * self.volume_multiplier,
                 'is_trending': is_trending,
@@ -173,10 +196,10 @@ class NickStrategy(StrategyBase):
                 'exit_long': exit_long,
                 'exit_short': exit_short,
                 'currently_long': self.entered_long,
-                'currently_short': self.entered_short,
-                'entry_price': self.entry_price if (self.entered_long or self.entered_short) else None,
-                'stop_loss': self.stop_loss if (self.entered_long or self.entered_short) else None,
-                'take_profit': self.take_profit if (self.entered_long or self.entered_short) else None,
+                'currently_short': False,  # No short trading
+                'entry_price': self.entry_price if self.entered_long else None,
+                'stop_loss': self.stop_loss if self.entered_long else None,
+                'take_profit': self.take_profit if self.entered_long else None,
                 'position': self.position
             }
             self.debug_data.append(debug_row)
@@ -192,36 +215,16 @@ class NickStrategy(StrategyBase):
                 self.entered_long = False
                 return self._return_signal(SignalInfo.sell(f"Take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})"))
         
-        if self.entered_short and self.position < 0:
-            if bar.close >= self.stop_loss:
-                logger.info(f"Short stop loss hit at {bar.close:.2f}")
-                self.entered_short = False
-                return self._return_signal(SignalInfo.buy(f"Short stop loss hit at ${bar.close:.2f} (SL: ${self.stop_loss:.2f})"))
-            elif bar.close <= self.take_profit:
-                logger.info(f"Short take profit hit at {bar.close:.2f}")
-                self.entered_short = False
-                return self._return_signal(SignalInfo.buy(f"Short take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})"))
+        # No short trading in Pine Script strategy
         
         # Generate signals
         if exit_long and self.position > 0:
-            logger.info(f"Exit long signal: choppy={is_choppy}, below_sma={bar.close < sma_exit}")
+            logger.info(f"Exit long signal: 2 consecutive bars below {self.exit_sma_length}-SMA")
             self.entered_long = False
-            exit_reasons = []
-            if is_choppy:
-                exit_reasons.append(f"Market choppy (ADX={current_adx:.1f})")
-            if bar.close < sma_exit:
-                exit_reasons.append(f"Price ${bar.close:.2f} < 5-SMA ${sma_exit:.2f}")
-            return self._return_signal(SignalInfo.sell(" + ".join(exit_reasons)))
+            exit_reason = f"2 consecutive bars closed below {self.exit_sma_length}-SMA (${sma_exit:.2f})"
+            return self._return_signal(SignalInfo.sell(exit_reason))
             
-        if exit_short and self.position < 0:
-            logger.info(f"Exit short signal: choppy={is_choppy}, above_sma={bar.close > sma_exit}")
-            self.entered_short = False
-            exit_reasons = []
-            if is_choppy:
-                exit_reasons.append(f"Market choppy (ADX={current_adx:.1f})")
-            if bar.close > sma_exit:
-                exit_reasons.append(f"Price ${bar.close:.2f} > 5-SMA ${sma_exit:.2f}")
-            return self._return_signal(SignalInfo.buy(" + ".join(exit_reasons)))
+        # No short exit logic (Pine Script only trades long)
             
         if long_signal and self.position == 0:
             logger.info(f"Long signal: ADX={current_adx:.1f}, RSI={current_rsi:.1f}, "
@@ -248,18 +251,7 @@ class NickStrategy(StrategyBase):
             
             return self._return_signal(SignalInfo.buy(" | ".join(reasons)))
             
-        if short_signal and self.position == 0:
-            logger.info(f"Short signal: ADX={current_adx:.1f}, RSI={current_rsi:.1f}, "
-                       f"Volume spike={volume_spike}, Breakdown below {range_low:.2f}")
-            self.entered_short = True
-            self.entry_price = bar.close
-            self.stop_loss = bar.close + (self.stop_loss_atr * current_atr)
-            self.take_profit = bar.close - (self.take_profit_atr * current_atr)
-            self.metadata['entry_type'] = 'short'
-            self.metadata['stop_loss'] = self.stop_loss
-            self.metadata['take_profit'] = self.take_profit
-            # Note: Our simple backtest doesn't support shorting, so we'll skip short trades
-            logger.warning("Short signal generated but backtester doesn't support shorting")
+        # No short trading in Pine Script strategy
             
         return self._return_signal(SignalInfo.hold())
     
@@ -493,7 +485,6 @@ class NickStrategy(StrategyBase):
         self.plus_di.clear()
         self.minus_di.clear()
         self.entered_long = False
-        self.entered_short = False
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.take_profit = 0.0
@@ -513,8 +504,7 @@ class NickStrategy(StrategyBase):
             'current_rsi': self.rsi_values[-1] if self.rsi_values else None,
             'current_adx': self.adx_values[-1] if self.adx_values else None,
             'current_atr': self.atr_values[-1] if self.atr_values else None,
-            'entered_long': self.entered_long,
-            'entered_short': self.entered_short
+            'entered_long': self.entered_long
         })
         return stats
     

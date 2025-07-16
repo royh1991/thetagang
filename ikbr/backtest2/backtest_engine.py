@@ -27,7 +27,8 @@ class BacktestEngine:
             days: int,
             initial_capital: float = 100000,
             commission: float = 1.0,
-            bar_size: str = '5 mins') -> Dict[str, Any]:
+            bar_size: str = '5 mins',
+            position_size_pct: float = 0.10) -> Dict[str, Any]:
         """
         Run a backtest
         
@@ -38,6 +39,7 @@ class BacktestEngine:
             initial_capital: Starting capital
             commission: Commission per trade
             bar_size: Bar size for historical data
+            position_size_pct: Position size as fraction of equity (0.10 = 10%, 1.0 = 100%)
             
         Returns:
             Dictionary with backtest results
@@ -46,7 +48,7 @@ class BacktestEngine:
         
         # Initialize components
         self.strategy = strategy
-        self.broker = BrokerSimulator(initial_capital, commission)
+        self.broker = BrokerSimulator(initial_capital, commission, position_size_pct)
         
         # Fetch historical data
         logger.info("Fetching historical data...")

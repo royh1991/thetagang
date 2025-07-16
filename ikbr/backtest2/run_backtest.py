@@ -44,6 +44,8 @@ def main():
                        choices=['simple', 'enhanced', 'nick'], help='Strategy to use')
     parser.add_argument('--capital', type=float, default=1000000, help='Initial capital')
     parser.add_argument('--commission', type=float, default=1.0, help='Commission per trade')
+    parser.add_argument('--position-size', type=float, default=0.10, 
+                       help='Position size as fraction of equity (0.10 = 10%, 1.0 = 100%)')
     parser.add_argument('--bar-size', type=str, default='5 mins', 
                        choices=['1 min', '5 mins', '15 mins', '30 mins', '1 hour', '1 day'],
                        help='Bar size for historical data')
@@ -108,7 +110,8 @@ def main():
             days=args.days,
             initial_capital=args.capital,
             commission=args.commission,
-            bar_size=args.bar_size
+            bar_size=args.bar_size,
+            position_size_pct=args.position_size
         )
         
         # Get equity curve and calculate metrics
