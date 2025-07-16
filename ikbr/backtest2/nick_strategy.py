@@ -2,7 +2,7 @@
 Nick's Funnel Breakout Strategy
 Based on Pine Script that combines breakout detection with trend/chop filtering
 """
-from typing import List, Optional, Tuple, Dict, Union
+from typing import List, Optional, Tuple, Dict, Union, Any
 import numpy as np
 from loguru import logger
 from .strategy_base import StrategyBase, Bar, Signal, SignalInfo
@@ -47,7 +47,7 @@ class NickStrategy(StrategyBase):
         self.minus_di = []
         
         # SPY data for market context
-        self.spy_data = None
+        self.spy_bars = []  # Will store aligned SPY bars
         self.spy_sma20 = []
         self.spy_sma50 = []
         
@@ -60,9 +60,6 @@ class NickStrategy(StrategyBase):
         
         # Debug data storage
         self.debug_data = []
-        
-        # Initialize data fetcher for SPY
-        self.data_fetcher = DataFetcher()
     
     def _return_signal(self, signal_info: SignalInfo) -> SignalInfo:
         """Helper method to store final signal and return it"""
@@ -72,6 +69,16 @@ class NickStrategy(StrategyBase):
             self.debug_data[-1]['signal_reason'] = signal_info.reason
         return signal_info
         
+    def needs_market_data(self) -> bool:
+        """This strategy needs SPY data for market context"""
+        return True
+    
+    def set_market_data(self, symbol: str, data: Any):
+        """Override to log when market data is set"""
+        super().set_market_data(symbol, data)
+        if symbol == 'SPY' and not data.empty:
+            logger.info(f"SPY data set with {len(data)} bars from {data['timestamp'].min()} to {data['timestamp'].max()}")
+    
     def calculate_signal(self, bar: Bar) -> Union[str, SignalInfo]:
         """Calculate trading signal based on funnel breakout strategy"""
         
@@ -125,6 +132,18 @@ class NickStrategy(StrategyBase):
         
         # Debug data collection
         if self.debug:
+            # Get current SPY data if available
+            spy_price = None
+            spy_sma20_val = None
+            spy_sma50_val = None
+            
+            if self.spy_bars:
+                spy_price = self.spy_bars[-1].close
+            if self.spy_sma20:
+                spy_sma20_val = self.spy_sma20[-1]
+            if self.spy_sma50:
+                spy_sma50_val = self.spy_sma50[-1]
+            
             debug_row = {
                 'timestamp': bar.timestamp,
                 'price': bar.close,
@@ -146,6 +165,9 @@ class NickStrategy(StrategyBase):
                 'volume_spike': volume_spike,
                 'macro_bullish': macro_bullish,
                 'macro_bearish': macro_bearish,
+                'spy_price': spy_price,
+                'spy_sma20': spy_sma20_val,
+                'spy_sma50': spy_sma50_val,
                 'long_signal': long_signal,
                 'short_signal': short_signal,
                 'exit_long': exit_long,
@@ -378,15 +400,76 @@ class NickStrategy(StrategyBase):
             self.minus_di.pop(0)
     
     def _check_market_context(self) -> Tuple[bool, bool]:
-        """Check SPY trend for market context"""
-        # For backtesting, we'll use a simplified approach
-        # In live trading, you would fetch real SPY data
+        """Check SPY trend for market context using actual SPY data"""
+        # Process SPY bar for this timestamp if available
+        if 'SPY' in self.market_data and self.current_bar:
+            spy_df = self.market_data['SPY']
+            current_timestamp = self.current_bar.timestamp
+            
+            # Debug: Log first time we process SPY data
+            if not hasattr(self, '_logged_spy_data'):
+                logger.debug(f"SPY data type: {type(spy_df)}, shape: {spy_df.shape if hasattr(spy_df, 'shape') else 'N/A'}")
+                logger.debug(f"Current timestamp: {current_timestamp}")
+                if isinstance(spy_df, pd.DataFrame) and not spy_df.empty:
+                    logger.debug(f"SPY data range: {spy_df['timestamp'].min()} to {spy_df['timestamp'].max()}")
+                    logger.debug(f"SPY sample price: {spy_df.iloc[0]['close']}")
+                self._logged_spy_data = True
+            
+            # Find the SPY bar closest to current timestamp
+            # First try exact match
+            spy_row = spy_df[spy_df['timestamp'] == current_timestamp]
+            
+            if spy_row.empty:
+                # Find the most recent SPY bar before current timestamp
+                earlier_bars = spy_df[spy_df['timestamp'] <= current_timestamp]
+                if not earlier_bars.empty:
+                    spy_row = earlier_bars.iloc[-1:]
+            
+            # Add SPY bar to our tracking
+            if not spy_row.empty:
+                spy_bar = Bar(
+                    timestamp=spy_row['timestamp'].iloc[0],
+                    open=spy_row['open'].iloc[0],
+                    high=spy_row['high'].iloc[0],
+                    low=spy_row['low'].iloc[0],
+                    close=spy_row['close'].iloc[0],
+                    volume=int(spy_row['volume'].iloc[0])
+                )
+                
+                # Maintain aligned SPY bars
+                if not self.spy_bars or spy_bar.timestamp > self.spy_bars[-1].timestamp:
+                    self.spy_bars.append(spy_bar)
+                
+                # Calculate SPY SMAs if we have enough data
+                if len(self.spy_bars) >= 50:
+                    sma20 = sum(b.close for b in self.spy_bars[-20:]) / 20
+                    sma50 = sum(b.close for b in self.spy_bars[-50:]) / 50
+                    
+                    self.spy_sma20.append(sma20)
+                    self.spy_sma50.append(sma50)
+                    
+                    # Keep only recent values
+                    if len(self.spy_sma20) > 100:
+                        self.spy_sma20.pop(0)
+                        self.spy_sma50.pop(0)
+                    
+                    macro_bullish = sma20 > sma50
+                    macro_bearish = sma20 < sma50
+                    
+                    return macro_bullish, macro_bearish
         
-        # Calculate SPY SMAs from current data (simplified)
+        # Fallback to using current symbol as proxy if no SPY data
         if len(self.bars) >= 50:
-            # Use current symbol as proxy for market (simplified)
             sma20 = sum(b.close for b in self.bars[-20:]) / 20
             sma50 = sum(b.close for b in self.bars[-50:]) / 50
+            
+            # Store these as well for debugging
+            self.spy_sma20.append(sma20)
+            self.spy_sma50.append(sma50)
+            
+            if len(self.spy_sma20) > 100:
+                self.spy_sma20.pop(0)
+                self.spy_sma50.pop(0)
             
             macro_bullish = sma20 > sma50
             macro_bearish = sma20 < sma50
@@ -395,6 +478,26 @@ class NickStrategy(StrategyBase):
         
         # Default to neutral
         return False, False
+    
+    def reset(self):
+        """Reset strategy state"""
+        super().reset()
+        # Clear SPY-specific data
+        self.spy_bars.clear()
+        self.spy_sma20.clear()
+        self.spy_sma50.clear()
+        # Clear other strategy-specific data
+        self.rsi_values.clear()
+        self.atr_values.clear()
+        self.adx_values.clear()
+        self.plus_di.clear()
+        self.minus_di.clear()
+        self.entered_long = False
+        self.entered_short = False
+        self.entry_price = 0.0
+        self.stop_loss = 0.0
+        self.take_profit = 0.0
+        self.debug_data.clear()
     
     def get_required_history(self) -> int:
         """Need at least 50 bars for all indicators"""

@@ -58,8 +58,19 @@ class BacktestEngine:
         
         logger.info(f"Fetched {len(self.data)} bars from {self.data['timestamp'].min()} to {self.data['timestamp'].max()}")
         
-        # Reset strategy state
+        # Reset strategy state before setting market data
         self.strategy.reset()
+        
+        # Fetch SPY data for market context if strategy needs it
+        spy_data = None
+        if hasattr(strategy, 'needs_market_data') and strategy.needs_market_data():
+            logger.info("Fetching SPY data for market context...")
+            spy_data = self.data_fetcher.fetch_historical_data('SPY', days, bar_size)
+            if not spy_data.empty:
+                logger.info(f"Fetched {len(spy_data)} SPY bars")
+                # Provide SPY data to strategy
+                if hasattr(strategy, 'set_market_data'):
+                    strategy.set_market_data('SPY', spy_data)
         
         # Process each bar
         bar_count = 0

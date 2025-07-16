@@ -60,6 +60,7 @@ class StrategyBase(ABC):
         self.bars: List[Bar] = []  # Historical bars
         self.current_bar: Optional[Bar] = None
         self.metadata: Dict[str, Any] = {}  # Strategy-specific data
+        self.market_data: Dict[str, Any] = {}  # Market data (e.g., SPY for context)
         
     def on_bar(self, bar: Bar) -> Union[str, SignalInfo]:
         """
@@ -118,6 +119,7 @@ class StrategyBase(ABC):
         self.bars.clear()
         self.current_bar = None
         self.metadata.clear()
+        self.market_data.clear()
     
     def get_stats(self) -> Dict[str, Any]:
         """Get strategy statistics"""
@@ -127,3 +129,19 @@ class StrategyBase(ABC):
             'bars_processed': len(self.bars),
             'metadata': self.metadata.copy()
         }
+    
+    def needs_market_data(self) -> bool:
+        """
+        Override this method to indicate if strategy needs market data (e.g., SPY)
+        """
+        return False
+    
+    def set_market_data(self, symbol: str, data: Any):
+        """
+        Set market data for the strategy
+        
+        Args:
+            symbol: Market symbol (e.g., 'SPY')
+            data: Historical data for the market symbol
+        """
+        self.market_data[symbol] = data
