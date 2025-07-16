@@ -830,3 +830,178 @@ Remember: Every component must be thoroughly tested before integration. Start wi
    - Implement graceful shutdown on Ctrl+C
    - Save detailed logs to separate file for live trading
    - Monitor account value and P&L in real-time
+
+## Advanced Backtesting Features (Added July 2025)
+
+### Debug Mode for Strategy Analysis
+
+We've implemented a comprehensive debug mode for the NickStrategy that saves all decision data to CSV:
+
+**Implementation**:
+```python
+# In strategy initialization
+self.debug = debug
+self.debug_data = []
+
+# During signal calculation, collect all data
+if self.debug:
+    debug_row = {
+        'timestamp': bar.timestamp,
+        'price': bar.close,
+        'volume': bar.volume,
+        'rsi': current_rsi,
+        'adx': current_adx,
+        'atr': current_atr,
+        'range_low': range_low,
+        'range_high': range_high,
+        'sma_5': sma_exit,
+        'is_trending': is_trending,
+        'bull_breakout': bull_breakout,
+        'volume_spike': volume_spike,
+        'macro_bullish': macro_bullish,
+        'long_signal': long_signal,
+        'final_signal': signal_info.signal,
+        'signal_reason': signal_info.reason
+    }
+    self.debug_data.append(debug_row)
+
+# Save to CSV after backtest
+strategy.save_debug_csv('debug_analysis.csv')
+```
+
+**Usage**:
+```bash
+python backtest2/run_backtest.py --symbol OKLO --days 5 --strategy nick \
+  --debug --debug-csv debug_analysis.csv
+```
+
+**Benefits**:
+- Analyze every bar's indicators and decisions
+- Verify strategy logic without scrolling through terminal
+- Import into Excel/pandas for deeper analysis
+- Track why trades were or weren't taken
+
+### Enhanced Trade Reasoning
+
+All trades now include detailed reasoning in the output:
+
+**SignalInfo Class**:
+```python
+@dataclass
+class SignalInfo:
+    """Trading signal with detailed reason"""
+    signal: str  # BUY, SELL, or HOLD
+    reason: str = ""  # Detailed reason for the signal
+```
+
+**Example Output**:
+```
+Trade #1: BUY signal "Breakout > $54.11 | ADX=62.8 | RSI=72.5 | Vol spike 1.5x | SPY bullish | SL=$53.91 | TP=$54.92"
+Trade #2: SELL signal "Take profit hit at $52.88 (TP: $52.58)"
+Trade #3: SELL signal "Price $54.39 < 5-SMA $54.70"
+```
+
+### Position Sizing Configuration
+
+The broker simulator now supports configurable position sizing:
+
+```python
+# In BrokerSimulator __init__
+self.position_size_pct = 0.10  # Use 10% of equity per trade
+
+# Dynamic calculation during buy
+total_equity = self.cash + (self.position * price)
+position_value = total_equity * self.position_size_pct
+max_shares = int((position_value - self.commission) / price)
+```
+
+### Market Context with SPY Data
+
+Strategies can now fetch and use SPY data for market context:
+
+```python
+def _fetch_spy_data_if_needed(self, bar_size: str = '5 mins'):
+    """Fetch SPY data for market context analysis"""
+    if self.symbol == 'SPY':
+        # Use own data if analyzing SPY
+        return
+    
+    # Fetch SPY data with same bar size as symbol
+    spy_df = self.data_fetcher.fetch_historical_data(
+        symbol='SPY',
+        days=days_needed,
+        bar_size=bar_size  # Match symbol's bar size
+    )
+    
+    # Calculate SPY SMAs for trend detection
+    sma20 = spy_closes[-20:].mean()
+    sma50 = spy_closes[-50:].mean()
+    macro_bullish = sma20 > sma50
+```
+
+### Removing Short Selling Logic
+
+When the backtester doesn't support shorting, remove all short-related code:
+
+1. Remove short signal generation
+2. Remove `entered_short` tracking
+3. Remove short exit conditions
+4. Remove short stop loss/take profit logic
+
+**Example**: Convert from long/short to long-only strategy by removing:
+```python
+# Remove this:
+short_signal = (is_trending and macro_bearish and bear_breakdown and 
+               volume_spike and rsi_bearish)
+
+# Keep only:
+long_signal = (is_trending and macro_bullish and bull_breakout and 
+              volume_spike and rsi_bullish)
+```
+
+### IB Gateway Connection Recovery
+
+**Extended Authentication Delays**: Sometimes IB Gateway requires multiple restarts over extended periods (up to 1+ hours) before successfully connecting.
+
+**Automated Recovery Scripts**:
+
+1. **Health Check Script** (`scripts/check_ib_gateway.sh`):
+   - Checks container running status
+   - Verifies authentication completed
+   - Tests actual API connectivity
+   - Auto-restarts with retry logic
+   
+2. **Backtest Wrapper** (`scripts/run_backtest_with_retry.sh`):
+   - Ensures IB Gateway healthy before running
+   - Automatically recovers from connection failures
+   - Retries backtest with exponential backoff
+
+**Usage**:
+```bash
+# Check health
+./scripts/check_ib_gateway.sh check
+
+# Force restart with monitoring
+./scripts/check_ib_gateway.sh restart
+
+# Run backtest with auto-recovery
+./scripts/run_backtest_with_retry.sh --symbol OKLO --days 5 --strategy nick
+```
+
+### Project Organization
+
+**Updated .gitignore patterns**:
+```
+# Backtest outputs and cache
+backtest2/runs/
+backtest2/data_cache/
+
+# Test files
+test_*.py
+debug_*.py
+check_*.py
+run_*.py
+trace_*.py
+```
+
+This keeps the repository clean while preserving important scripts like `run_backtest.py`.
