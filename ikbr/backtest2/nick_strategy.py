@@ -59,6 +59,10 @@ class NickStrategy(StrategyBase):
         self.stop_loss = 0.0
         self.take_profit = 0.0
         
+        # Exit tracking for cooldown
+        self.last_exit_bar_index = -999  # Track when we last exited
+        self.cooldown_bars = 10  # Minimum bars to wait after exit before re-entry
+        
         # Debug data storage
         self.debug_data = []
     
@@ -125,8 +129,14 @@ class NickStrategy(StrategyBase):
         is_trending = current_adx > self.adx_trend_threshold
         is_choppy = current_adx <= self.adx_trend_threshold
         
+        # Check if we're in cooldown period after exit
+        bars_since_exit = len(self.bars) - self.last_exit_bar_index
+        in_cooldown = bars_since_exit < self.cooldown_bars
+        
         # Entry signals (Pine Script only trades long)
-        long_signal = (is_trending and macro_bullish and bull_breakout and 
+        # Only generate signal if: not in position, not in cooldown, and conditions met
+        long_signal = (not self.entered_long and not in_cooldown and
+                      is_trending and macro_bullish and bull_breakout and 
                       volume_spike and rsi_bullish)
         # Pine Script doesn't implement short trading
         short_signal = False
@@ -200,7 +210,9 @@ class NickStrategy(StrategyBase):
                 'entry_price': self.entry_price if self.entered_long else None,
                 'stop_loss': self.stop_loss if self.entered_long else None,
                 'take_profit': self.take_profit if self.entered_long else None,
-                'position': self.position
+                'position': self.position,
+                'in_cooldown': in_cooldown,
+                'bars_since_exit': bars_since_exit
             }
             self.debug_data.append(debug_row)
         
@@ -209,10 +221,12 @@ class NickStrategy(StrategyBase):
             if bar.close <= self.stop_loss:
                 logger.info(f"Long stop loss hit at {bar.close:.2f}")
                 self.entered_long = False
+                self.last_exit_bar_index = len(self.bars)  # Track exit for cooldown
                 return self._return_signal(SignalInfo.sell(f"Stop loss hit at ${bar.close:.2f} (SL: ${self.stop_loss:.2f})"))
             elif bar.close >= self.take_profit:
                 logger.info(f"Long take profit hit at {bar.close:.2f}")
                 self.entered_long = False
+                self.last_exit_bar_index = len(self.bars)  # Track exit for cooldown
                 return self._return_signal(SignalInfo.sell(f"Take profit hit at ${bar.close:.2f} (TP: ${self.take_profit:.2f})"))
         
         # No short trading in Pine Script strategy
@@ -221,6 +235,7 @@ class NickStrategy(StrategyBase):
         if exit_long and self.position > 0:
             logger.info(f"Exit long signal: 2 consecutive bars below {self.exit_sma_length}-SMA")
             self.entered_long = False
+            self.last_exit_bar_index = len(self.bars)  # Track exit for cooldown
             exit_reason = f"2 consecutive bars closed below {self.exit_sma_length}-SMA (${sma_exit:.2f})"
             return self._return_signal(SignalInfo.sell(exit_reason))
             
@@ -488,6 +503,7 @@ class NickStrategy(StrategyBase):
         self.entry_price = 0.0
         self.stop_loss = 0.0
         self.take_profit = 0.0
+        self.last_exit_bar_index = -999
         self.debug_data.clear()
     
     def get_required_history(self) -> int:

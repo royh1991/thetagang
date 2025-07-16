@@ -57,9 +57,9 @@ def main():
     
     # Nick strategy parameters
     parser.add_argument('--lookback-period', type=int, default=20, help='Breakout lookback period for Nick strategy')
-    parser.add_argument('--rsi-threshold', type=int, default=50, help='RSI threshold for Nick strategy')
-    parser.add_argument('--volume-multiplier', type=float, default=1.5, help='Volume spike multiplier for Nick strategy')
-    parser.add_argument('--adx-threshold', type=int, default=20, help='ADX trend threshold for Nick strategy')
+    parser.add_argument('--rsi-threshold', type=int, default=55, help='RSI threshold for Nick strategy')
+    parser.add_argument('--volume-multiplier', type=float, default=2.0, help='Volume spike multiplier for Nick strategy')
+    parser.add_argument('--adx-threshold', type=int, default=30, help='ADX trend threshold for Nick strategy')
     parser.add_argument('--debug', action='store_true', help='Enable debug logging for Nick strategy')
     parser.add_argument('--debug-csv', type=str, help='Save debug data to CSV file (requires --debug)')
     

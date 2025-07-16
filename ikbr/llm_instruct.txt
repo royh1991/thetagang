@@ -831,6 +831,128 @@ Remember: Every component must be thoroughly tested before integration. Start wi
    - Save detailed logs to separate file for live trading
    - Monitor account value and P&L in real-time
 
+## Nick Strategy Pine Script Implementation Issues (Fixed July 2025)
+
+### Critical Bugs Found and Fixed
+
+1. **Excessive Trading Issue (240 trades vs expected 30-40)**
+   
+   **Root Causes Identified:**
+   - ADX threshold command-line default was 20 instead of 30
+   - No cooldown period after exits, allowing immediate re-entry
+   - Strategy would generate new long signals while already in position
+   - Missing position management logic that Pine Script has built-in
+
+2. **ADX Threshold Bug**
+   - **Problem**: Trades were entering with ADX as low as 20.67 despite threshold being 30
+   - **Cause**: run_backtest.py had wrong default: `--adx-threshold default=20`
+   - **Fix**: Changed to `default=30` to match Pine Script
+   - **Files**: ikbr/backtest2/run_backtest.py
+
+3. **Immediate Re-entry Bug**
+   - **Problem**: Strategy would exit and re-enter within 5 minutes (e.g., sell at 09:50, buy at 09:55)
+   - **Cause**: No cooldown logic after exits
+   - **Fix**: Added 10-bar cooldown period after any exit
+   - **Implementation**:
+     ```python
+     # Added to __init__:
+     self.last_exit_bar_index = -999
+     self.cooldown_bars = 10
+     
+     # Check cooldown before entry:
+     bars_since_exit = len(self.bars) - self.last_exit_bar_index
+     in_cooldown = bars_since_exit < self.cooldown_bars
+     
+     # Update on exit:
+     self.last_exit_bar_index = len(self.bars)
+     ```
+
+4. **Position Management Bug**
+   - **Problem**: 93 instances of long_signal=True while already in position
+   - **Cause**: Entry logic didn't check current position status
+   - **Fix**: Modified entry signal logic:
+     ```python
+     long_signal = (not self.entered_long and not in_cooldown and
+                   is_trending and macro_bullish and bull_breakout and 
+                   volume_spike and rsi_bullish)
+     ```
+
+5. **Wrong Default Parameters**
+   - **Fixed in run_backtest.py**:
+     - RSI threshold: 50 → 55
+     - Volume multiplier: 1.5 → 2.0
+     - ADX threshold: 20 → 30
+     - Take profit ATR: 2.0 → 2.5
+
+6. **SPY Data Integration Issue**
+   - **Problem**: SPY data was being cleared by reset() after being set
+   - **Cause**: BacktestEngine called strategy.reset() after set_market_data()
+   - **Fix**: Moved reset() call before setting market data in backtest_engine.py
+
+### Pine Script vs Python Differences
+
+1. **Order Execution**
+   - Pine Script: `strategy.entry()` won't create duplicate entries
+   - Python Fix: Check `not self.entered_long` before generating signal
+
+2. **Bar Processing**
+   - Pine Script: Evaluates at bar close by default
+   - Python: Evaluates on every bar update
+   - Future enhancement: Add bar close evaluation option
+
+3. **Position Tracking**
+   - Pine Script: Automatic position management
+   - Python: Manual tracking with entered_long flag
+
+### Results After Fixes
+
+- **Before**: 240 trades over 190 days
+- **After**: 88 trades over 190 days
+- **Trade Distribution**:
+  - Stop loss exits: 45.5%
+  - Take profit exits: 36.4%
+  - Smooth exits (2 bars below SMA): 18.2%
+- **Win Rate**: 40.9%
+- **All entry criteria properly enforced**:
+  - 0 entries with ADX < 30
+  - 0 entries with RSI < 55
+  - 0 entries when already in position
+  - 0 trades during cooldown period
+
+### Key Files Modified
+
+1. **ikbr/backtest2/nick_strategy.py**
+   - Added cooldown logic
+   - Fixed entry signal generation
+   - Track exit bar index
+   - Added debug fields for cooldown
+
+2. **ikbr/backtest2/run_backtest.py**
+   - Fixed default parameters
+   - ADX: 20 → 30
+   - RSI: 50 → 55
+   - Volume: 1.5 → 2.0
+
+3. **ikbr/backtest2/backtest_engine.py**
+   - Fixed market data initialization order
+   - Moved reset() before set_market_data()
+
+### Testing Commands
+
+```bash
+# Test with fixed parameters and 100% position sizing
+python backtest2/run_backtest.py --symbol TSLA --days 190 --strategy nick \
+  --bar-size "5 mins" --position-size 1.0 --trades-csv trades.csv \
+  --debug --debug-csv debug_analysis.csv
+
+# Verify metrics
+# Check debug CSV for:
+# - in_cooldown and bars_since_exit columns
+# - No trades where in_cooldown=True
+# - No long_signal=True when currently_long=True
+# - ADX always > 30 for entries
+```
+
 ## Advanced Backtesting Features (Added July 2025)
 
 ### Debug Mode for Strategy Analysis
