@@ -28,6 +28,9 @@ ib-gateway-data/
 # Mac
 .DS_Store
 
+# Claude
+.claude/
+
 # Backtest outputs and cache
 backtest2/runs/
 backtest2/data_cache/

@@ -55,24 +55,48 @@ class DataFetcher:
         if not self.ib or not self.ib.isConnected():
             self.connect()
         
-        # Create contract
-        contract = Stock(symbol, 'SMART', 'USD')
-        self.ib.qualifyContracts(contract)
+        # Create contract with better error handling
+        try:
+            contract = Stock(symbol, 'SMART', 'USD')
+            self.ib.qualifyContracts(contract)
+            
+            if not contract.conId:
+                logger.error(f"Failed to qualify contract for {symbol}")
+                return pd.DataFrame()
+                
+        except Exception as e:
+            logger.error(f"Error qualifying contract for {symbol}: {e}")
+            # Try reconnecting once
+            logger.info("Attempting to reconnect...")
+            self.disconnect()
+            self.connect()
+            
+            try:
+                contract = Stock(symbol, 'SMART', 'USD')
+                self.ib.qualifyContracts(contract)
+            except Exception as e2:
+                logger.error(f"Failed to qualify contract after reconnect: {e2}")
+                return pd.DataFrame()
         
         # Fetch data
         end_datetime = ''  # Use current time
         duration_str = f'{days} D'
         
         logger.info(f"Fetching {days} days of {bar_size} bars for {symbol}")
-        bars = self.ib.reqHistoricalData(
-            contract,
-            endDateTime=end_datetime,
-            durationStr=duration_str,
-            barSizeSetting=bar_size,
-            whatToShow='TRADES',
-            useRTH=True,  # Regular trading hours only
-            formatDate=1
-        )
+        
+        try:
+            bars = self.ib.reqHistoricalData(
+                contract,
+                endDateTime=end_datetime,
+                durationStr=duration_str,
+                barSizeSetting=bar_size,
+                whatToShow='TRADES',
+                useRTH=True,  # Regular trading hours only
+                formatDate=1
+            )
+        except Exception as e:
+            logger.error(f"Error fetching historical data for {symbol}: {e}")
+            return pd.DataFrame()
         
         if not bars:
             logger.error(f"No data received for {symbol}")

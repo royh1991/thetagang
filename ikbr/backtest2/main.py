@@ -62,6 +62,7 @@ class LiveTrader:
         
         self.ib = IB()
         self.contract: Optional[Contract] = None
+        self.ticker = None  # Store ticker subscription
         self.running = False
         self.last_order_time = datetime.min
         self.current_position = 0
@@ -99,6 +100,13 @@ class LiveTrader:
         await self.ib.qualifyContractsAsync(self.contract)
         logger.info(f"Contract qualified: {self.contract}")
         
+        # Subscribe to market data for this contract
+        self.ticker = self.ib.reqMktData(self.contract, '', False, False)
+        logger.info(f"Subscribed to market data for {self.symbol}")
+        
+        # Wait a moment for ticker to populate
+        await asyncio.sleep(2)
+        
         # Get account info
         self.account = self.ib.managedAccounts()[0]
         logger.info(f"Using account: {self.account}")
@@ -124,10 +132,25 @@ class LiveTrader:
         try:
             account_value = await self.get_account_value()
             
-            # Get current price
-            ticker = self.ib.ticker(self.contract)
-            if not ticker.last or ticker.last <= 0:
-                logger.warning("No valid price for position sizing")
+            # Use stored ticker with better validation
+            if not self.ticker:
+                logger.error("No ticker subscription available")
+                return 0
+                
+            # Try multiple price fields in order of preference
+            price = None
+            if self.ticker.last and self.ticker.last > 0:
+                price = self.ticker.last
+            elif self.ticker.bid and self.ticker.ask and self.ticker.bid > 0 and self.ticker.ask > 0:
+                price = (self.ticker.bid + self.ticker.ask) / 2
+                logger.info(f"Using mid price: ${price:.2f} (bid: ${self.ticker.bid:.2f}, ask: ${self.ticker.ask:.2f})")
+            elif self.ticker.close and self.ticker.close > 0:
+                price = self.ticker.close
+                logger.info(f"Using close price: ${price:.2f}")
+            else:
+                logger.warning("No valid price available for position sizing")
+                logger.debug(f"Ticker data: last={self.ticker.last}, bid={self.ticker.bid}, "
+                           f"ask={self.ticker.ask}, close={self.ticker.close}")
                 return 0
                 
             # Calculate position value
@@ -137,16 +160,16 @@ class LiveTrader:
             )
             
             # Calculate shares
-            shares = int(position_value / ticker.last)
+            shares = int(position_value / price)
             
             logger.info(f"Position sizing: Account=${account_value:,.0f}, "
-                       f"Target=${position_value:,.0f}, Price=${ticker.last:.2f}, "
+                       f"Target=${position_value:,.0f}, Price=${price:.2f}, "
                        f"Shares={shares}")
             
             return shares
             
         except Exception as e:
-            logger.error(f"Error calculating position size: {e}")
+            logger.error(f"Error calculating position size: {e}", exc_info=True)
             return 0
             
     async def place_order(self, action: str, quantity: int):
@@ -271,7 +294,15 @@ class LiveTrader:
     async def print_status(self):
         """Print current status"""
         account_value = await self.get_account_value()
-        position_value = self.current_position * self.ib.ticker(self.contract).last if self.current_position else 0
+        
+        # Calculate position value safely
+        position_value = 0
+        if self.current_position and self.ticker:
+            if self.ticker.last and self.ticker.last > 0:
+                position_value = self.current_position * self.ticker.last
+            elif self.ticker.bid and self.ticker.ask:
+                mid_price = (self.ticker.bid + self.ticker.ask) / 2
+                position_value = self.current_position * mid_price
         
         logger.info(f"=== Status Update ===")
         logger.info(f"Account Value: ${account_value:,.0f}")
@@ -284,7 +315,10 @@ class LiveTrader:
         logger.info("Shutting down...")
         self.running = False
         
-        # Cancel market data
+        # Cancel market data subscriptions
+        if hasattr(self, 'ticker') and self.ticker:
+            self.ib.cancelMktData(self.ticker)
+            
         if hasattr(self, 'bars_subscription') and self.bars_subscription:
             self.ib.cancelRealTimeBars(self.bars_subscription)
             
@@ -368,10 +402,37 @@ async def main():
     signal.signal(signal.SIGINT, signal_handler)
     signal.signal(signal.SIGTERM, signal_handler)
     
+    # Connection retry logic
+    max_connect_retries = 3
+    connect_retry_delay = 30
+    
+    for attempt in range(max_connect_retries):
+        try:
+            # Connect to IB
+            logger.info(f"Connection attempt {attempt + 1}/{max_connect_retries}")
+            await trader.connect()
+            
+            # Connection successful, break retry loop
+            break
+            
+        except asyncio.TimeoutError:
+            logger.error(f"Connection timeout on attempt {attempt + 1}")
+            if attempt < max_connect_retries - 1:
+                logger.info(f"Waiting {connect_retry_delay} seconds before retry...")
+                await asyncio.sleep(connect_retry_delay)
+            else:
+                logger.error("Max connection attempts reached")
+                return
+        except Exception as e:
+            logger.error(f"Connection error: {e}")
+            if attempt < max_connect_retries - 1:
+                logger.info(f"Waiting {connect_retry_delay} seconds before retry...")
+                await asyncio.sleep(connect_retry_delay)
+            else:
+                logger.error("Max connection attempts reached")
+                return
+    
     try:
-        # Connect to IB
-        await trader.connect()
-        
         # Check if strategy needs market data (SPY)
         if hasattr(strategy, 'needs_market_data') and strategy.needs_market_data():
             logger.info("Fetching SPY data for market context...")
@@ -379,10 +440,24 @@ async def main():
             # For now, fetch recent historical data
             from backtest2.data_fetcher import DataFetcher
             fetcher = DataFetcher()
-            spy_data = fetcher.fetch_historical_data('SPY', days=5, bar_size='5 mins')
-            if not spy_data.empty:
-                strategy.set_market_data('SPY', spy_data)
-                logger.info(f"Set SPY market data with {len(spy_data)} bars")
+            
+            # Retry SPY data fetch with better error handling
+            spy_fetch_retries = 3
+            for i in range(spy_fetch_retries):
+                try:
+                    spy_data = fetcher.fetch_historical_data('SPY', days=5, bar_size='5 mins')
+                    if not spy_data.empty:
+                        strategy.set_market_data('SPY', spy_data)
+                        logger.info(f"Set SPY market data with {len(spy_data)} bars")
+                        break
+                    else:
+                        logger.warning(f"Empty SPY data on attempt {i + 1}")
+                except Exception as e:
+                    logger.error(f"Error fetching SPY data: {e}")
+                    if i < spy_fetch_retries - 1:
+                        await asyncio.sleep(5)
+                    else:
+                        logger.warning("Continuing without SPY data")
         
         # Run trading loop with shutdown monitoring
         run_task = asyncio.create_task(trader.run())

@@ -1,15 +1,15 @@
 #!/bin/bash
+
 # IB Gateway Health Check and Auto-Restart Script
-# This script checks if IB Gateway is properly authenticated and restarts if needed
+# Based on patterns from llm_instruct.txt
 
 set -e
 
 # Configuration
 CONTAINER_NAME="ibkr-gateway"
-MAX_WAIT_TIME=120  # Maximum seconds to wait for authentication
-CHECK_INTERVAL=5   # Seconds between checks
-MAX_RESTART_ATTEMPTS=3
-LOG_FILE="ib_gateway_health.log"
+MAX_RETRIES=3
+WAIT_TIME=120  # seconds to wait for authentication
+CHECK_INTERVAL=10  # seconds between checks
 
 # Colors for output
 RED='\033[0;31m'
@@ -17,193 +17,174 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-# Logging function
-log() {
-    echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
+# Function to print colored output
+print_status() {
+    local color=$1
+    local message=$2
+    echo -e "${color}[$(date '+%Y-%m-%d %H:%M:%S')] ${message}${NC}"
 }
 
-# Check if container is running
+# Function to check if container is running
 check_container_running() {
-    if docker ps --format "table {{.Names}}" | grep -q "^${CONTAINER_NAME}$"; then
-        return 0
-    else
-        return 1
-    fi
+    docker ps --filter "name=$CONTAINER_NAME" --format "{{.Names}}" | grep -q "$CONTAINER_NAME"
 }
 
-# Check if IB Gateway is authenticated
-check_authentication() {
-    local auth_status=$(docker logs "$CONTAINER_NAME" 2>&1 | tail -100 | grep -E "(Login has completed|Configuration tasks completed)" | wc -l)
-    if [ "$auth_status" -ge 2 ]; then
-        return 0
-    else
-        return 1
-    fi
+# Function to check if IB Gateway is authenticated
+check_authenticated() {
+    docker logs "$CONTAINER_NAME" 2>&1 | tail -50 | grep -q "Login has completed"
 }
 
-# Check for connection errors
-check_for_errors() {
-    local error_count=$(docker logs "$CONTAINER_NAME" 2>&1 | tail -50 | grep -E "(Connection refused|TimeoutError|will exit if login dialog)" | wc -l)
-    if [ "$error_count" -gt 0 ]; then
-        return 1
-    else
-        return 0
-    fi
+# Function to check if configuration tasks completed
+check_config_completed() {
+    docker logs "$CONTAINER_NAME" 2>&1 | tail -50 | grep -q "Configuration tasks completed"
 }
 
-# Test API connection
+# Function to test API connection
 test_api_connection() {
-    # Use Python to test the actual API connection
-    python3 -c "
+    # Simple Python script to test connection
+    python3 - <<EOF
 import asyncio
 from ib_async import IB
-import sys
 
-async def test_connection():
+async def test():
     ib = IB()
     try:
-        await ib.connectAsync('localhost', 4102, clientId=999, timeout=10)
-        await ib.disconnectAsync()
-        print('SUCCESS')
+        await asyncio.wait_for(
+            ib.connectAsync('localhost', 4102, clientId=999),
+            timeout=10
+        )
+        print("API_CONNECTION_SUCCESS")
+        ib.disconnect()
         return True
     except Exception as e:
-        print(f'FAILED: {e}')
+        print(f"API_CONNECTION_FAILED: {e}")
         return False
 
-try:
-    result = asyncio.run(test_connection())
-    sys.exit(0 if result else 1)
-except:
-    sys.exit(1)
-" 2>/dev/null
+asyncio.run(test())
+EOF
 }
 
-# Restart container
+# Function to restart container
 restart_container() {
-    log "Restarting IB Gateway container..."
-    docker restart "$CONTAINER_NAME" >/dev/null 2>&1
-    sleep 10  # Initial wait for container to start
+    print_status $YELLOW "Restarting $CONTAINER_NAME..."
+    docker restart "$CONTAINER_NAME"
+    sleep 5
 }
 
-# Main health check function
-perform_health_check() {
-    echo -e "${YELLOW}=== IB Gateway Health Check ===${NC}"
+# Function to perform full health check
+health_check() {
+    print_status $GREEN "Starting IB Gateway health check..."
     
-    # Check if container is running
+    # Check 1: Container running
     if ! check_container_running; then
-        log "ERROR: Container $CONTAINER_NAME is not running"
-        echo -e "${RED}✗ Container not running${NC}"
+        print_status $RED "Container $CONTAINER_NAME is not running!"
         return 1
     fi
-    echo -e "${GREEN}✓ Container is running${NC}"
+    print_status $GREEN "✓ Container is running"
     
-    # Check authentication status
-    if check_authentication; then
-        echo -e "${GREEN}✓ IB Gateway is authenticated${NC}"
-        
-        # Test API connection
-        echo -n "Testing API connection... "
-        if test_api_connection; then
-            echo -e "${GREEN}✓ API connection successful${NC}"
-            return 0
-        else
-            echo -e "${RED}✗ API connection failed${NC}"
-            return 1
-        fi
+    # Check 2: Authentication completed
+    if ! check_authenticated; then
+        print_status $RED "IB Gateway not authenticated"
+        return 1
+    fi
+    print_status $GREEN "✓ Authentication completed"
+    
+    # Check 3: Configuration completed
+    if ! check_config_completed; then
+        print_status $RED "Configuration tasks not completed"
+        return 1
+    fi
+    print_status $GREEN "✓ Configuration completed"
+    
+    # Check 4: API connectivity
+    if test_api_connection | grep -q "API_CONNECTION_SUCCESS"; then
+        print_status $GREEN "✓ API connection successful"
+        return 0
     else
-        echo -e "${RED}✗ IB Gateway not authenticated${NC}"
-        
-        # Check for specific errors
-        if ! check_for_errors; then
-            echo -e "${RED}✗ Connection errors detected${NC}"
-        fi
+        print_status $RED "API connection failed"
         return 1
     fi
 }
 
-# Auto-restart with retry logic
-auto_restart_with_retry() {
-    local attempt=1
+# Function to wait for authentication with timeout
+wait_for_auth() {
+    local elapsed=0
     
-    while [ $attempt -le $MAX_RESTART_ATTEMPTS ]; do
-        log "Restart attempt $attempt of $MAX_RESTART_ATTEMPTS"
+    print_status $YELLOW "Waiting for IB Gateway authentication..."
+    
+    while [ $elapsed -lt $WAIT_TIME ]; do
+        if check_authenticated && check_config_completed; then
+            print_status $GREEN "Authentication completed!"
+            return 0
+        fi
         
-        # Restart the container
-        restart_container
-        
-        # Wait for authentication
-        local wait_time=0
-        while [ $wait_time -lt $MAX_WAIT_TIME ]; do
-            echo -ne "\rWaiting for authentication... ${wait_time}s / ${MAX_WAIT_TIME}s"
-            
-            if check_authentication; then
-                echo -e "\n${GREEN}✓ Authentication successful${NC}"
-                
-                # Additional wait for API to be ready
-                sleep 5
-                
-                # Test API connection
-                if test_api_connection; then
-                    log "IB Gateway successfully restarted and API is accessible"
-                    return 0
-                fi
-            fi
-            
-            sleep $CHECK_INTERVAL
-            wait_time=$((wait_time + CHECK_INTERVAL))
-        done
-        
-        echo -e "\n${RED}✗ Authentication timeout${NC}"
-        log "Authentication failed after ${MAX_WAIT_TIME} seconds"
-        
-        attempt=$((attempt + 1))
+        sleep $CHECK_INTERVAL
+        elapsed=$((elapsed + CHECK_INTERVAL))
+        print_status $YELLOW "Waiting... ($elapsed/$WAIT_TIME seconds)"
     done
     
-    log "ERROR: Failed to restart IB Gateway after $MAX_RESTART_ATTEMPTS attempts"
+    print_status $RED "Authentication timeout after $WAIT_TIME seconds"
     return 1
 }
 
-# Main script logic
+# Main function
 main() {
-    case "${1:-check}" in
+    local mode=${1:-check}
+    
+    case $mode in
         check)
-            if perform_health_check; then
-                echo -e "\n${GREEN}IB Gateway is healthy${NC}"
+            # Just perform health check
+            if health_check; then
+                print_status $GREEN "IB Gateway is healthy"
                 exit 0
             else
-                echo -e "\n${RED}IB Gateway health check failed${NC}"
+                print_status $RED "IB Gateway health check failed"
                 exit 1
             fi
             ;;
-        
+            
         restart)
-            log "Manual restart requested"
-            if auto_restart_with_retry; then
-                echo -e "\n${GREEN}IB Gateway restarted successfully${NC}"
+            # Force restart and wait
+            restart_container
+            if wait_for_auth && health_check; then
+                print_status $GREEN "IB Gateway restarted successfully"
                 exit 0
             else
-                echo -e "\n${RED}Failed to restart IB Gateway${NC}"
+                print_status $RED "IB Gateway restart failed"
                 exit 1
             fi
             ;;
-        
+            
         auto)
-            # Continuous monitoring mode
-            log "Starting continuous monitoring mode"
-            while true; do
-                if ! perform_health_check >/dev/null 2>&1; then
-                    log "Health check failed, initiating auto-restart"
-                    auto_restart_with_retry
+            # Auto mode with retries
+            local retry_count=0
+            
+            while [ $retry_count -lt $MAX_RETRIES ]; do
+                if health_check; then
+                    print_status $GREEN "IB Gateway is healthy"
+                    exit 0
                 fi
-                sleep 60  # Check every minute
+                
+                retry_count=$((retry_count + 1))
+                print_status $YELLOW "Health check failed, attempting restart ($retry_count/$MAX_RETRIES)..."
+                
+                restart_container
+                
+                if wait_for_auth && health_check; then
+                    print_status $GREEN "IB Gateway recovered successfully"
+                    exit 0
+                fi
             done
+            
+            print_status $RED "Failed to recover IB Gateway after $MAX_RETRIES attempts"
+            exit 1
             ;;
-        
+            
         *)
             echo "Usage: $0 [check|restart|auto]"
-            echo "  check   - Check IB Gateway health (default)"
-            echo "  restart - Force restart IB Gateway"
-            echo "  auto    - Continuous monitoring with auto-restart"
+            echo "  check   - Check health status (default)"
+            echo "  restart - Force restart and wait for ready"
+            echo "  auto    - Check health and auto-restart if needed"
             exit 1
             ;;
     esac

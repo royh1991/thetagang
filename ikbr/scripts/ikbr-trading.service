@@ -1,0 +1,37 @@
+[Unit]
+Description=IBKR Trading Bot with Nick Strategy
+After=network.target docker.service
+Requires=docker.service
+
+[Service]
+Type=simple
+User=royhu91
+Group=royhu91
+WorkingDirectory=/home/royhu91/thetagang/ikbr
+
+# Environment variables
+Environment="PATH=/home/royhu91/thetagang/venv/bin:/usr/local/bin:/usr/bin:/bin"
+Environment="PYTHONPATH=/home/royhu91/thetagang"
+Environment="IB_GATEWAY_HOST=localhost"
+Environment="IB_GATEWAY_PORT=4102"
+Environment="TRADING_MODE=paper"
+
+# Main command - using the wrapper script with retry logic
+ExecStart=/home/royhu91/thetagang/ikbr/scripts/run_trading_with_retry.sh --symbol TSLA --strategy nick --position-size 0.10 --adx-threshold 30
+
+# Restart configuration
+Restart=on-failure
+RestartSec=60
+StartLimitBurst=5
+StartLimitIntervalSec=600
+
+# Logging
+StandardOutput=append:/home/royhu91/trading.log
+StandardError=append:/home/royhu91/trading_error.log
+
+# Security
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
