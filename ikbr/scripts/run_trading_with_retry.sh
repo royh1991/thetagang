@@ -29,8 +29,10 @@ run_trading_bot() {
     cd "$PROJECT_DIR"
     
     # Activate virtual environment if it exists
-    if [ -f "../venv/bin/activate" ]; then
-        source ../venv/bin/activate
+    if [ -f "$PROJECT_DIR/venv/bin/activate" ]; then
+        source "$PROJECT_DIR/venv/bin/activate"
+    elif [ -f "$PROJECT_DIR/../venv/bin/activate" ]; then
+        source "$PROJECT_DIR/../venv/bin/activate"
     fi
     
     # Run the trading bot with all passed arguments
