@@ -31,13 +31,19 @@ check_trading_bot() {
 start_trading_bot() {
     cd "$PROJECT_DIR"
     
-    # Activate virtual environment
-    if [ -f "../venv/bin/activate" ]; then
-        source ../venv/bin/activate
+    # Find and use the correct Python from venv
+    local PYTHON_CMD="python"
+    if [ -f "$PROJECT_DIR/venv/bin/python" ]; then
+        PYTHON_CMD="$PROJECT_DIR/venv/bin/python"
+    elif [ -f "$PROJECT_DIR/../venv/bin/python" ]; then
+        PYTHON_CMD="$PROJECT_DIR/../venv/bin/python"
+    else
+        log "ERROR: Virtual environment not found!"
+        return 1
     fi
     
     # Start in background and save PID
-    nohup python backtest2/main.py --symbol TSLA --strategy nick \
+    nohup $PYTHON_CMD backtest2/main.py --symbol TSLA --strategy nick \
         >> /home/royhu91/trading.log 2>&1 &
     
     echo $! > "$PIDFILE"

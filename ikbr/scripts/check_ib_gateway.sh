@@ -41,10 +41,28 @@ check_config_completed() {
 
 # Function to test API connection
 test_api_connection() {
+    # Find python from venv if available
+    local PYTHON_CMD="python3"
+    local SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    local PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
+    
+    # Try to find venv python
+    if [ -f "$PROJECT_DIR/venv/bin/python" ]; then
+        PYTHON_CMD="$PROJECT_DIR/venv/bin/python"
+    elif [ -f "$PROJECT_DIR/../venv/bin/python" ]; then
+        PYTHON_CMD="$PROJECT_DIR/../venv/bin/python"
+    else
+        print_status $YELLOW "Warning: No virtual environment found, using system Python"
+    fi
+    
     # Simple Python script to test connection
-    python3 - <<EOF
+    $PYTHON_CMD - <<EOF
 import asyncio
-from ib_async import IB
+try:
+    from ib_async import IB
+except ImportError:
+    print("API_CONNECTION_FAILED: ib_async module not found. Please activate virtual environment.")
+    exit(1)
 
 async def test():
     ib = IB()
